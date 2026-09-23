@@ -16,6 +16,10 @@ Each prototype documents its own setup, tests, diagrams and limitations.
 - [Short proposal](short.md)
 - [Technical design](tech-design.md)
 - [Hackathon proposal](tameion-hackathon-proposal.md)
+- [The case, with flow diagrams](case.md)
+- [Flow, trust assumptions and attack surface](design-review.md)
+- [Descriptions and pitch scripts](pitch.md)
+- [Showcase deck, PDF](showcase/warrant-showcase.pdf) (10 slides, 1280×720; last slide carries a QR code to this repository)
 
 ## Restoration on 2026-09-22
 
