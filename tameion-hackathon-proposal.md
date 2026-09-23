@@ -1,6 +1,8 @@
 # Warrant × Tameion: decision proposal for the Canteen × Circle × Arc hackathon
 
 **Status.** Decision proposal v2, 2026-09-22, for review. Supersedes v1 same day.
+Updated 2026-09-23 with the RFB alignment and gaps (§3a), and §4 rewritten to match
+the implemented code in `policy-execution/`.
 This is **not a new design**. It is the decision to adapt the existing Warrant
 proof-of-concept design (`warrant/tech-design.md`, `warrant/proving-language-compare.md`,
 `warrant/short.md`) from its showcase (a child's wallet governed by fiscal-receipt
@@ -23,7 +25,8 @@ replayable proof of compliance with a hash-pinned policy — enforced on-chain b
 payment vault on Arc. Demo vertical: vendor/contractor invoices, touching RFB-02
 (AP/AR), RFB-03 (contractor payments) and RFB-04 (autonomous operator) at once.
 RFB-05's screening quorum becomes a warrant fact source, not the product. New repo;
-reuse the Cedar evaluator, evidence checker, and warrant-schema work already designed.
+reuse the implemented policy interpreter (`policy-execution/`), and add the evidence
+checker designed in `policy-execution/evidence-checker.md`.
 
 **What carries over from the existing design unchanged** (per `tech-design.md`):
 the warrant bundle format (§9.5: EIP-712 oracle signature over
@@ -37,6 +40,10 @@ the verification-vs-re-execution discipline — the warrant is *verification*
 (recorded inputs + pinned logic version hash to the recorded output), never claimed
 as re-execution.
 
+*Superseded in part by §4 (2026-09-23):* the signed digest is now the 12-word
+authorization journal from `policy-execution/` (13 with `po_id`), and the vault has
+no `setPolicy` — the policy is fixed at deployment.
+
 **What changes for the adaptation:**
 
 | Existing showcase | Tameion adaptation |
@@ -45,7 +52,7 @@ as re-execution.
 | Tier 0 hard facts from tags 1212/1163/1030 | Tier 0 hard facts from deterministic invoice fields + screening quorum (`isBlacklisted`, Chainalysis oracle — the self-enforcing sources per Datum) |
 | Child wallet, parent approves policy | Business vault, owner approves policy |
 | RUB-kopecks `unit` field | USDC 6-decimals `unit` on Arc |
-| Cedar per-item + document-level queries (no universal quantifier — tech-design §11) | Same structure: per-line-item + invoice-level query; `unknown` → Ask-owner in demo, Deny in strict mode |
+| Cedar per-item + document-level queries (no universal quantifier — tech-design §11) | Warrant policy language: `all`/`any` rule tree plus per-line atoms (`LineLabelsWithin`); `Unknown` → `Ask` via three-valued evaluation |
 | Mock OFD signature as source trust root | The *submitting channel* is untrusted by definition (invoices are attacker-controlled text); source_sig becomes "document as received", and trust comes from the evidence checker + deterministic validators, not from the sender |
 
 ## 2. Why — read off the judging rubric
@@ -63,7 +70,7 @@ alone"**; testnet USDC acceptable, mainnet preferred; **synthetic data disqualif
   "every spend control is code we write" — our code is on-chain, verifiable, and
   completing that roadmap rather than competing with it.
 - *Innovation:* proof-carrying payments. The warrant chain (evidence-checked facts →
-  Cedar evaluation → signed warrant → on-chain verification) is not something other
+  verified policy evaluation → signed warrant or zkVM receipt → on-chain verification) is not something other
   teams will have.
 - *"Not prompts alone":* satisfied structurally — the vault pays only against a valid
   oracle signature over a digest pinned to the approved `policyHash`, with the
@@ -97,26 +104,133 @@ alone"**; testnet USDC acceptable, mainnet preferred; **synthetic data disqualif
   "tier the investigation, never tier the prohibition" — screening hard facts are
   gates, never gradient inputs to be outvoted.
 
+## 3a. Alignment with the Requests for Builders (checked 2026-09-23)
+
+RFB texts were re-checked against the live hackathon page
+(https://tameion.thecanteenapp.com/) and match `../docs/requests-for-builders/`.
+✓ covered by the current design · ~ partial · ✗ not covered.
+
+**Primary: RFB-04 Autonomous Business Operator — example build "PolicyWallet".**
+The RFB describes it as "a smart-contract wallet with per-category budgets and
+per-transaction approval limits, so the agent's authority is enforced on-chain and
+cannot be talked past". That is the warrant vault.
+
+| RFB-04 asks for | Status |
+|---|---|
+| Budgets and approval limits enforced in the contract, not the prompt | ✓ per-payment cap, lifetime budget, per-PO ceiling, policy immutable once published |
+| Per-category budgets | ✗ categories are an allowlist only; no per-category or per-period budgets |
+| Escalation to a human only when a policy threshold is hit | ✓ `Ask` outcome |
+| Decision log: what was done, why, and what it cost | ✓ warrant binds policy hash, document hash and evidence; ~ agent reasoning not yet recorded |
+| One complete workflow run by the agent end to end | ✗ no agent implemented |
+| Liquidity monitoring; buying services; moving funds to reserve or yield | ✗ out of scope |
+
+**Workflow inside RFB-04: RFB-02 AP/AR Automation (payables only).**
+
+| RFB-02 asks for | Status |
+|---|---|
+| Read invoices to work out what is actually owed | ✓ evidence checker design (Tier 0 / Tier 1) |
+| Detect duplicate invoices and probable fraud | ✓ obligation ID derived from seller tax ID + invoice number; per-PO ceiling; invoice payment details ignored |
+| Match payments to invoices without a human | ✓ payment bound to obligation ID and document hash |
+| Screen a vendor's wallet address before paying | ~ dropped from the current design; Arc reverts transfers to or from blocklisted addresses, which is a backstop, not screening |
+| Payment timing: early-pay discount against preserving cash | ✗ |
+| Receivables and collections | ✗ |
+
+**Narrow: RFB-03 Contractor & Vendor Network Manager.** ✓ milestone release after
+verified work (reviewer `Acceptance` path); ~ vendor onboarding (signed registry
+credential, no screening); ✗ reputation, discovery, rate negotiation, credit limits.
+
+**Not covered: RFB-01 Treasury** (forecasting, USYC yield, allocation) and
+**RFB-05 Compliance** beyond screening results usable as policy facts and
+reproducible warrants usable in audits.
+
+**Cross-cutting gap.** The rubric scores an agent that "choose[s] when to pay, and
+can explain why". Warrant is the guardrail around that agent; the agent's own
+decisions are not yet designed.
+
+**Pitch:** PolicyWallet for RFB-04, demonstrated through an RFB-02 payables
+workflow. Gaps to close, in priority order:
+
+1. Per-category and per-period budgets in the vault — named explicitly by
+   PolicyWallet. Periodic budgets must be stated as `maxRefill + refill` (§4.2).
+2. Agent decision layer: which approved obligations to pay and when (due date,
+   early-pay discount, balance on hand), with its reasoning written into the log.
+3. Address screening as a policy fact (per §6.4; `isBlacklisted` true blocks).
+4. One end-to-end run on Arc testnet with real invoices: receive USDC → check
+   balance → pay → log → escalate over the limit. RFB-04 asks for exactly this.
+
+Design for gaps 1–3 on the policy side: `policy-execution/evidence-checker.md`.
+
 ## 4. Decisions already made — do not reopen
 
-From `proving-language-compare.md:194` and its phasing table (:186–192):
+Rewritten 2026-09-23 to match the implemented code. The v2 decision (Cedar, no
+custom DSL, no zkVM this window) was overtaken by the implementation; this section
+records what exists and what it commits the build to.
 
-1. **Evaluator = the Cedar Rust engine**, `evaluator_id = blake3(binary)` with the
-   schema version; evidence checker in Rust with Kani harnesses; **Halmos properties on
-   the vault contract** (Phase 1). No custom DSL, no zkVM, no Lean work this window —
-   those are Phases 2–4 and belong on the roadmap slide only.
-2. **Wallet = the lean custom contract from tech-design §10**, not a Safe and not
-   Zodiac Roles. Reasons, now documented: Zodiac Roles is **not deployed on Arc**
-   (`../RFB-004/review-2.md` §7), Safe-on-Arc availability is unverified, and the
-   contract is ~20 lines doing one thing. The honest cost, stated per house style:
-   this is unaudited code in the position of maximum consequence (review-1's warning
-   applies). Mitigations: minimal surface (single `pay` function, no delegatecall, no
-   external calls except USDC transfer), Halmos properties per the phasing table, the
-   fixture suite, and stating the bound as `maxRefill + refill` if a periodic ceiling
-   is added. Deploying Zodiac Roles to Arc as a public good is a *stretch goal*, not
-   the plan.
-3. **Signature scheme = EIP-712 oracle signature on-chain + COSE_Sign1 provenance
-   off-chain**, per tech-design §9.5. Not COSE-only on-chain.
+1. **Evaluator = the Warrant typed policy language with a fixed Rust interpreter**
+   (`policy-execution/`), not Cedar.
+   - Policy is data: a rule tree of `all`, `any`, `amount_at_most`,
+     `vendor_category_in`, `accepted`, `deliverable_equals`, `recipient_equals`,
+     bounded to 128 nodes and 8 levels. New policies need no new code; a new
+     operation is an interpreter upgrade.
+   - `evaluate()` has a Verus proof that it matches the declarative rule semantics
+     (7 verified, 0 errors; 8 deliberate mutations rejected). The proof covers the
+     evaluator only, not `authorize()`, signature checks or parsing.
+   - `policy_hash` = SHA-256 over domain-tagged bincode of the policy, including
+     trusted issuer keys and scope.
+   - Evaluator identity = the RISC Zero guest image ID, plus the evaluator source
+     SHA-256 recorded in `verified/verification-results.md`.
+   - Why it replaced Cedar: one source runs natively, inside the zkVM guest, and
+     under Verus, so the proved code is the executed code.
+   - Not present yet, and still required: the evidence checker and three-valued
+     evaluation (`evidence-checker.md`), Halmos properties on the vault. The
+     earlier Kani plan has no code; drop it unless time allows.
+2. **Wallet = a lean custom vault on Arc**, not a Safe and not Zodiac Roles — reasons
+   unchanged: Zodiac Roles is **not deployed on Arc** (`../RFB-004/review-2.md` §7),
+   Safe-on-Arc availability is unverified. New constraints:
+   - the policy hash is fixed at deployment (no `setPolicy`); a new policy means a
+     new vault. The budget grows only by deposit. The buyer's PO key cannot change
+     policy, and the policy bounds what a PO may authorise;
+   - the vault checks the authorization journal against its own policy and scope,
+     current time, remaining budget and per-PO spend, and consumes the task ID;
+   - honest cost: unaudited code in the position of maximum consequence. Mitigations:
+     single `pay` path, no delegatecall, no external calls except the USDC transfer,
+     Halmos properties, the fixture suite, and `maxRefill + refill` for any periodic
+     ceiling.
+   Neither existing prototype meets this yet: `policy-execution` has no vault, and
+   the Circom `ProofPolicyVault` still has `setPolicy` and `setBudget`.
+3. **Authorization reaches the vault through one interpreter, in three modes**:
+   - *Signer mode (live path):* an owner-run service runs the native interpreter and
+     signs the journal with EIP-712; the vault checks it with `ecrecover`.
+     Sub-second. Trust assumption: the signer key, bounded by the vault's caps.
+   - *Receipt mode (trustless):* the RISC Zero guest proves the same authorization;
+     the vault calls `IRiscZeroVerifier.verify(seal, imageId, journalDigest)` on our
+     own verifier deployment (RISC Zero lists none on Arc). Arc testnet's BN254
+     precompiles were verified on 2026-09-23. Costs: a Groth16 wrap that needs x86 +
+     Docker, and minutes per payment (the native succinct receipts took 224–236 s).
+   - *Tiered mode (target):* the vault accepts both, chosen by amount. Not yet
+     implemented; it is a threshold check in `pay()` once both paths exist.
+     - Below `proofThreshold`: signer signature or receipt. Payment is immediate.
+     - At or above `proofThreshold`: receipt required; a signature is not accepted
+       in its place. Payment waits for the proof.
+     - **Signer-path cap.** Without it, a stolen signer key could split a large
+       drain into many sub-threshold payments with invented task IDs. The vault
+       therefore tracks cumulative signer-mode spend against its own ceiling
+       (per period, stated as `maxRefill + refill`). Worst-case loss from a signer
+       key compromise = min(remaining budget, remaining signer-path allowance).
+     - Deployment-time immutables, like the policy hash: `signer`, `imageId`,
+       verifier address, `proofThreshold`, signer-path cap. Changing any of them
+       means a new vault.
+     - Both modes carry the same journal, so the vault's checks (policy, scope,
+       time, budget, per-PO spend, task ID) are identical; only the authenticator
+       differs.
+     - Demo: a small invoice pays in under a second; a large one pays after its
+       receipt verifies on Arc. Pre-stage the large proof for the video.
+     - Build order: signer mode first, receipt mode once one Groth16 receipt
+       verifies on Arc testnet, then the threshold.
+   COSE_Sign1 provenance stays off-chain and optional. The Circom prototype is kept
+   as a reference only: it proves fast (~1.5 s measured) but requires the owner to
+   approve every invoice's facts on-chain, and its development setup allows at most
+   4,096 constraints (3,895 used).
 4. **Name = Warrant.** It reads correctly in both the family and enterprise contexts.
 
 ## 5. Open decisions this file does not settle
@@ -147,8 +261,9 @@ Stated plainly; each maps to a fixture or rehearsal task.
 1. **The oracle key is a trust assumption.** Every warrant is reproducible from
    public inputs by any verifier (the §7 auditor flow from tech-design), and the
    contract's allowance arithmetic is signature-independent — but "signed by the
-   oracle" is not "derived on chain." Do not overclaim; zkVM is the honest fix
-   (Phase 2). Acceptance: the verifier CLI re-executes every demo warrant live.
+   oracle" is not "derived on chain." Do not overclaim; the RISC Zero mode (§4.3)
+   is the honest fix, and tiered mode bounds the key's exposure to the signer-path
+   cap. Acceptance: the verifier CLI re-executes every demo warrant live.
 2. **Select-vs-quantify is the load-bearing invariant.** Category and
    obligation-reference are derived on the trusted side *before* eval, and the
    derived values — not model hints — are bound into the digest. Acceptance: fixture
@@ -170,7 +285,7 @@ Stated plainly; each maps to a fixture or rehearsal task.
 
 ## 7. The demo (3-minute video)
 
-1. Owner writes a policy in plain English; approves the generated Cedar term;
+1. Owner writes a policy in plain English; approves the generated policy rule tree;
    `policyHash` lands on Arc.
 2. Agent processes three invoices live:
    - normal — pays in under a second, warrant visible;
@@ -199,8 +314,9 @@ Constraint: synthetic data is disqualified, so payments must be real.
 
 - **D1–2 (Phase 0, blocking):** Arc deployment feasibility; USDC contract interface
   on Arc; Arc CLI + Circle CLI setup, faucet, Paymaster.
-- **D2–5:** port vault contract to Arc (USDC 6-decimals), Halmos properties; Cedar
-  evaluator service; warrant schema (unchanged format, invoice facts).
+- **D2–5:** vault contract on Arc (USDC 6-decimals, immutable policy), Halmos
+  properties; signing service around the existing policy interpreter; `Tri` and
+  three-valued evaluation with its Verus extension.
 - **D6–9:** agent pipeline — invoice ingestion (Factur-X deterministic parse first,
   LLM extraction with evidence spans second, per Quittance's ordering), Tier 0
   validators, evidence checker, warrant assembly; the demo invoice set + fixtures.
