@@ -207,8 +207,12 @@ records what exists and what it commits the build to.
      own verifier deployment (RISC Zero lists none on Arc). Arc testnet's BN254
      precompiles were verified on 2026-09-23. Costs: a Groth16 wrap that needs x86 +
      Docker, and minutes per payment (the native succinct receipts took 224–236 s).
-   - *Tiered mode (target):* the vault accepts both, chosen by amount. Not yet
-     implemented; it is a threshold check in `pay()` once both paths exist.
+   - *Tiered mode (implemented in `InvoiceEscrow`, 2026-09-24):* the escrow
+     accepts both, chosen by amount, plus a buyer-approval path for invoices the
+     checker leaves undecided. The signer, its allowance and the threshold are
+     chosen by the buyer per order, not fixed at deployment; the signing service
+     holds the policy and reads the order's spend from the chain. The points
+     below were the plan; deviations are noted in place.
      - Below `proofThreshold`: signer signature or receipt. Payment is immediate.
      - At or above `proofThreshold`: receipt required; a signature is not accepted
        in its place. Payment waits for the proof.
@@ -217,9 +221,10 @@ records what exists and what it commits the build to.
        therefore tracks cumulative signer-mode spend against its own ceiling
        (per period, stated as `maxRefill + refill`). Worst-case loss from a signer
        key compromise = min(remaining budget, remaining signer-path allowance).
-     - Deployment-time immutables, like the policy hash: `signer`, `imageId`,
-       verifier address, `proofThreshold`, signer-path cap. Changing any of them
-       means a new vault.
+     - Deployment-time immutables: `imageId`, verifier address, token. As built,
+       `signer`, `proofThreshold` and the signer-path cap are per order (set in
+       `offer`, accepted by the vendor), so one escrow serves many buyers and a
+       key rotation is a new order, not a new contract.
      - Both modes carry the same journal, so the vault's checks (policy, scope,
        time, budget, per-PO spend, task ID) are identical; only the authenticator
        differs.

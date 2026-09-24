@@ -1,7 +1,7 @@
 # Warrant for USDC: the case, with diagrams
 
-Status: 2026-09-23. What is built in `policy-execution/` and how a payment flows.
-Numbers are from local runs on 2026-09-23 (4 vCPUs, no GPU) unless stated.
+Status: 2026-09-24. What is built in `policy-execution/` and how a payment flows.
+Numbers are from local runs on 2026-09-23 and 2026-09-24 (4 vCPUs, no GPU) unless stated.
 
 Abbreviations: PO — purchase order; USDC — USD Coin; zkVM — zero-knowledge
 virtual machine; LLM — large language model; UBL — Universal Business Language;
@@ -49,12 +49,12 @@ flowchart LR
 
 | Actor | Holds | Does |
 |---|---|---|
-| Buyer | Funds; policy; PO key; the signing service | Approves policy, funds orders, signs sub-threshold authorizations, may revoke signing |
+| Buyer | Funds; policy; PO key; the signing service | Approves policy, funds orders naming a signer per order, signs sub-threshold authorizations, approves undecided invoices, may revoke signing |
 | Vendor | Their wallet | Accepts orders, delivers, sends invoices, gets paid |
 | Registry | Registry key | Signs vendor credentials: tax ID → address, category |
 | Agent (untrusted) | Nothing that can pay | Reads invoices, proposes claims, assembles inputs, relays transactions |
 | Prover | Nothing that can pay | Runs the interpreter in the zkVM for proof-mode payments |
-| `InvoiceEscrow` | Reserved USDC | Enforces every bound listed in §6 |
+| `InvoiceEscrow` | Reserved USDC | Enforces every bound listed in §6; pays only the order's vendor on every path |
 
 ## 4. Order lifecycle
 
@@ -63,7 +63,7 @@ stateDiagram-v2
     [*] --> Offered: buyer funds ceiling (offer)
     Offered --> Accepted: vendor accepts by acceptBy
     Offered --> Closed: buyer cancels, or anyone after acceptBy
-    Accepted --> Accepted: settle / settleSigned (one invoice each)
+    Accepted --> Accepted: settle / settleSigned / settleApproved (one invoice each)
     Accepted --> Closed: anyone after settleBy; remainder to buyer
     Closed --> [*]
 ```
@@ -77,24 +77,28 @@ sequenceDiagram
     autonumber
     actor Vendor
     participant Agent as Agent (untrusted)
-    participant Chain as InvoiceEscrow on Arc
     participant Signer as Buyer-run signing service
+    participant Chain as InvoiceEscrow on Arc
     Vendor->>Agent: Invoice (UBL XML)
     Agent->>Agent: Parse, propose line claims
-    Agent->>Chain: read spent(po)
-    Agent->>Signer: InvoiceInput (bytes, claims, credentials, po_spent)
-    Signer->>Signer: authorize_invoice: Tier 0, Tier 1, signatures, evaluate3
-    alt Allow
+    Agent->>Signer: SignRequest (bytes, claims, signed credentials)
+    Signer->>Signer: Reject unknown fields (no policy, no po_spent from the agent)
+    Signer->>Chain: read order: state, signer, spent, allowance, threshold, deadline
+    Signer->>Signer: Refuse unless the order names this key and is live
+    Signer->>Signer: authorize_invoice with own policy and live spent: Tier 0, Tier 1, signatures, evaluate3
+    alt Allow, below threshold, within allowance
         Signer-->>Agent: journal + signature
         Agent->>Chain: settleSigned(journal, signature)
-        Chain->>Chain: 14 checks + threshold + allowance + signer
+        Chain->>Chain: 14 checks + threshold + allowance + order's signer
         Chain-->>Vendor: USDC
-    else Ask / Deny
-        Signer-->>Agent: no signature
+    else Ask
+        Signer-->>Agent: no signature; ask record (see 5d)
+    else Deny, or a proof is needed
+        Signer-->>Agent: refused
     end
 ```
 
-Measured: 0.03 s from evaluation to settled transaction on a local chain.
+Measured: 0.04 s from reading the order to settled transaction on a local chain.
 
 ### 5b. Proof mode (at or above the threshold)
 
@@ -126,21 +130,51 @@ reserved, so the wait is latency, not counterparty risk.
 
 ```mermaid
 flowchart TD
-  A[Allowed journal, amount a] --> T{a < proofThreshold?}
+  D[Checker outcome] --> K{Allow?}
+  K -- Ask --> B[Buyer reads the invoice] --> Q{Buyer approves?}
+  Q -- yes --> AP[settleApproved: buyer's key, within ceiling]
+  Q -- no --> N[Not paid; funds return at settleBy]
+  K -- Deny --> N
+  K -- Allow --> T{a < order's proofThreshold?}
   T -- no --> P[Proof required]
-  T -- yes --> R{"signer set, not revoked,<br/>amount within allowance?"}
+  T -- yes --> R{"order names a signer, not revoked,<br/>amount within allowance?"}
   R -- yes --> S[Signature settles now]
   R -- no --> P
 ```
 
+### 5d. Ask: escalation to the buyer
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Agent as Agent (untrusted)
+    participant Signer as Signing service
+    actor Buyer
+    participant Chain as InvoiceEscrow on Arc
+    actor Vendor
+    Agent->>Signer: SignRequest with a line nobody can label
+    Signer-->>Agent: ask record: reasons, obligationId, documentHash, payable
+    Agent->>Buyer: escalate with the invoice and the record
+    Buyer->>Chain: settleApproved(orderId, obligationId, amount, documentHash)
+    Chain->>Chain: buyer's key, accepted order, before deadline, within ceiling, obligation unused
+    Chain-->>Vendor: USDC
+```
+
+The buyer's approval is bounded like every other path: the order's vendor, its
+ceiling, its deadline, and one payment per obligation across all paths. It is not
+bounded by the signer allowance or threshold, because it is the buyer's own
+decision with their own key.
+
 ## 6. What the escrow enforces
 
-Both paths run the same checks: journal shape; order exists, accepted, before
-`settleBy`; policy version, chain, escrow address, token; recipient is the order's
-vendor; proven PO ceiling equals the funded ceiling; amount fits the remaining
-ceiling (live state); obligation ID unused; nonzero hashes; validity window.
-Then the authenticator: a proof for the pinned image, or a signature from the
-immutable signer within threshold and allowance.
+Proof and signature paths run the same checks: journal shape; order exists,
+accepted, before `settleBy`; policy version, chain, escrow address, token;
+recipient is the order's vendor; proven PO ceiling equals the funded ceiling;
+amount fits the remaining ceiling (live state); obligation ID unused; nonzero
+hashes; validity window. Then the authenticator: a proof for the pinned image, or
+a signature from the signer this order names, within its threshold and
+allowance. Buyer approval skips the journal, since there is none, and keeps the
+order, deadline, ceiling and obligation checks, plus the buyer's own key.
 
 ## 7. The demo moments
 
@@ -152,20 +186,25 @@ immutable signer within threshold and allowance.
    consumed; a re-issued number runs into the PO ceiling.
 4. **Over the ceiling.** Denied off-chain by `WithinPo`; rejected on chain by
    live `spent` even with a stale input.
-5. **Unknown line.** No PO match and no lexicon term: Ask, no payment path.
-6. **Stolen signer key.** Signature for a different recipient reverts; the buyer
-   revokes signing for the order; a proof still pays the honest vendor.
+5. **Unknown line.** No PO match and no lexicon term: Ask. The service signs
+   nothing and hands back the reasons; the buyer settles it with one call of their
+   own, within the same ceiling.
+6. **Stolen signer key.** Signature for a different recipient reverts; a key the
+   order does not name is refused; the buyer revokes signing for the order; a
+   proof still pays the honest vendor.
+7. **Smuggled inputs.** A request carrying its own `po_spent` or policy is
+   refused before evaluation; the service reads the spend from the chain.
 
 ## 8. Evidence
 
 | What | Result |
 |---|---|
 | Verus | 16 obligations verified; 14/14 deliberate bugs rejected |
-| Rust tests | 40 passed (fixtures E1–E13, authority checks, cross-language fixtures) |
-| Solidity tests | 54 passed, incl. fuzzing on ceiling and allowance |
+| Rust tests | 40 in the checker plus 3 in the signer service (order ID layout, signer address, order decoding) |
+| Solidity tests | 57 passed, incl. fuzzing on ceiling and allowance, per-order signer isolation, buyer approval bounds |
 | Arc testnet | Read-only simulation: real proof verifies, tamper rejected, escrow constructs |
-| Local chain | Signed settlement 0.03 s; real succinct proof generated and verified |
-| Not done | Groth16 wrap on this machine (no Docker); public Arc deployment; real traction |
+| Local chain | Signed settlement 0.04 s with the order read from chain; buyer approval of an undecided invoice; smuggled inputs and unnamed signers refused; real succinct proof generated and verified |
+| Not done | Groth16 wrap and reproducible guest build on this machine (no Docker); public Arc deployment; real traction |
 
 ## 9. Fit to the hackathon
 
@@ -183,11 +222,11 @@ What it takes to deploy and run the demo on Arc testnet, as of 2026-09-23.
 | Layer | Needed | Status |
 |---|---|---|
 | Arc testnet access | RPC endpoint (`rpc.testnet.arc.io`, chain ID 5042002); a deployer wallet funded with testnet USDC, since Arc uses USDC for gas; the testnet USDC token address | Read-only probe passes (`scripts/check-arc.py`); no wallet funded yet |
-| On-chain contracts | Our own copy of the RISC Zero Groth16 verifier (RISC Zero lists no Arc deployment) plus `InvoiceEscrow`, deployed with `DeployInvoice.s.sol` using the image ID of the exact prover build, the signer address and the proof threshold | Script ready; not deployed publicly |
-| Buyer wallet | Funds orders, holds the PO key, calls `offer` and `revokeSigner` | Local test key only |
+| On-chain contracts | Our own copy of the RISC Zero Groth16 verifier (RISC Zero lists no Arc deployment) plus `InvoiceEscrow`, deployed with `DeployInvoice.s.sol` using the reproducible image ID (`RISC0_USE_DOCKER=1`). Signer, allowance and threshold are chosen per order at `offer` | Script ready; not deployed publicly |
+| Buyer wallet | Funds orders naming the signer, holds the PO key, calls `offer`, `settleApproved` and `revokeSigner` | Local test key only |
 | Vendor wallet and registry key | Vendor accepts orders and receives USDC; the registry key signs the vendor credential | Local test keys only |
-| Signing service | One host running `warrant-host invoice-sign` with the signer key; any Linux box or container. Signed settlement measured at 0.03 s | Works locally |
-| Prover | An x86 machine with Docker for the Groth16 wrap, ideally with a GPU. On 4 CPUs the succinct proof takes about 20 minutes | Blocking for the proof leg: this environment has no Docker |
+| Signing service | One host running `warrant-host invoice-sign` with the policy file, the signer key and read access to an Arc RPC endpoint; any Linux box or container. Signed settlement measured at 0.04 s | Works locally |
+| Prover | An x86 machine with Docker, for the reproducible guest build and the Groth16 wrap, ideally with a GPU. On 4 CPUs the succinct proof takes about 20 minutes. `scripts/prover-vm.sh` sets it up | Blocking for the proof leg: this environment has no Docker |
 | Agent runtime | An LLM call that reads the invoice and proposes line claims, plus a relayer wallet that submits transactions (anyone may relay) | Claims are assembled by `scripts/invoice-demo.py` today |
 | Demo data | Real invoices; the hackathon disqualifies synthetic data. Real UBL XML from an actual vendor is the remaining gap | Fixtures only |
 | Presentation | The deck (`showcase/warrant-showcase.pdf`) and a block explorer tab on Arc showing the settlement transactions | Deck ready; live transactions pending deployment |
@@ -200,8 +239,8 @@ takes minutes.
 
 **Minimum plan for showcase day**
 
-1. Rent one x86 VM with Docker (GPU optional), build the invoice guest there, and
-   record its image ID.
+1. Rent one x86 VM with Docker (GPU optional), run `scripts/prover-vm.sh`, and
+   record the reproducible image ID it prints.
 2. Deploy verifier and escrow to Arc testnet with that image ID; fund buyer and
    deployer with testnet USDC.
 3. Run the signing service on the same VM; pre-generate one wrapped proof for the
