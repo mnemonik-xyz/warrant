@@ -92,7 +92,7 @@ sequenceDiagram
         Chain->>Chain: 14 checks + threshold + allowance + order's signer
         Chain-->>Vendor: USDC
     else Ask
-        Signer-->>Agent: no signature; ask record (see 5d)
+        Signer-->>Agent: no signature, ask record (see 5d)
     else Deny, or a proof is needed
         Signer-->>Agent: refused
     end

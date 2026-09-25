@@ -75,11 +75,11 @@ sequenceDiagram
     Buyer->>Buyer: LLM judgment: fit to requirements, delivery date, choose Q
     Buyer->>Buyer: sign PO: poId = R, lines = Q's item codes and categories, ceiling, validity
     Buyer->>Chain: offer(Terms): policyHash, poId, seller's payout address, ceiling, signer terms, deadlines
-    Note over Chain: USDC locked; order Offered
+    Note over Chain: USDC locked, order Offered
     Buyer->>Board: mark R awarded to Q, order ID
     Seller->>Board: read award
     Seller->>Chain: accept(orderId)
-    Note over Chain: order Accepted; buyer cannot withdraw before settleBy
+    Note over Chain: order Accepted, buyer cannot withdraw before settleBy
 ```
 
 ## 5. Payment flow: from delivery to settlement
@@ -95,7 +95,7 @@ sequenceDiagram
     participant Chain as InvoiceEscrow on Arc
     actor Owner as Buyer's owner
 
-    Seller->>Buyer: ships hardware; sends tracking and serials
+    Seller->>Buyer: ships hardware, sends tracking and serials
     Receiving->>Receiving: confirms arrival against the PO lines
     Receiving-->>Buyer: signed Acceptance: obligation ID, document hash, recipient, amount
     Seller->>Buyer: invoice for R: item codes from Q, amounts, seller tax ID (machine-issued XML)
@@ -113,17 +113,17 @@ sequenceDiagram
             Buyer->>Owner: escalate in the inbox
             Owner->>Chain: settleApproved(orderId, obligationId, amount, documentHash)
         else Deny
-            Service-->>Buyer: refused; nothing to settle
+            Service-->>Buyer: refused, nothing to settle
         end
     else amount at or above the threshold
         Buyer->>Prover: full checker input
         Prover-->>Buyer: receipt (journal + proof), wrapped for EVM
         Buyer->>Chain: settle(seal, journal)
     end
-    Chain->>Chain: 14 journal checks or approval checks; obligation consumed
+    Chain->>Chain: 14 journal checks or approval checks, obligation consumed
     Chain-->>Seller: USDC to the credential's payout address
     Note over Chain: partial deliveries repeat under the same order until the ceiling
-    Note over Chain: after settleBy anyone closes; remainder returns to the buyer
+    Note over Chain: after settleBy anyone closes, remainder returns to the buyer
 ```
 
 ## 6. Order lifecycle on chain
