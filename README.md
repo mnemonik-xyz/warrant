@@ -13,6 +13,8 @@ Each prototype documents its own setup, tests, diagrams and limitations.
 
 ## Design documents
 
+- [Whitepaper](whitepaper.md) (the full argument and the protocol, in
+  ASD-STE100 Simplified Technical English)
 - [Short proposal](short.md)
 - [Technical design](tech-design.md)
 - [Hackathon proposal](tameion-hackathon-proposal.md)
