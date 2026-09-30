@@ -1,6 +1,6 @@
 # Warrant: proof-carrying authorization for agent payments
 
-Version 0.1 · 2026-09-30 · Written in ASD-STE100 Simplified Technical English.
+Version 0.1 · 2026-09-30
 
 This document describes `warrant` at commit `8b31c48` and `policy-execution` at
 commit `c589871`. Measurements come from local runs on 2026-09-23 and 2026-09-24,
