@@ -1,6 +1,6 @@
 [submodule "policy-execution"]
 	path = policy-execution
-	url = git@github.com:mnemonik-dev/policy-execution.git
+	url = git@github.com:mnemonik-xyz/policy-execution.git
 [submodule "proof-execution"]
 	path = proof-execution
-	url = git@github.com:mnemonik-dev/prrof-execution.git
+	url = git@github.com:mnemonik-xyz/proof-execution.git
