@@ -24,6 +24,7 @@ Each prototype documents its own setup, tests, diagrams and limitations.
 - [Showcase deck, PDF](showcase/warrant-showcase.pdf) (10 slides, 1280×720; last slide carries a QR code to this repository)
 - [Real invoices: specification and collection guide](real-invoices/spec.md) ([по-русски](real-invoices/spec.ru.md))
 - [Use case: automated hardware purchase between agents](hardware-purchase/spec.md)
+- [Solver bounty: proof-based acceptance and result delivery](solver-bounty/README.md)
 
 ## Restoration on 2026-09-22
 
