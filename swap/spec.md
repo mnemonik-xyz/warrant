@@ -166,6 +166,7 @@ sequenceDiagram
   RS->>B: observe s
   RS->>A: claim leg A with s (exit action, never blocked)
   Note over IS,RS: on timeout, each side refunds its own leg (exit action)
+```
 
 ---
 
@@ -209,7 +210,7 @@ The warrant binds the exact transaction that the signer signs:
 
 | Chain family | `TxBinding` content |
 |---|---|
-| Bitcoin | Unsigned transaction id of the PSBT and every BIP 341 sighash that the signer produces |
+| Bitcoin | Unsigned transaction id of the PSBT and every BIP 341 sighash that the signer produces. Every signature uses `SIGHASH_DEFAULT` or `SIGHASH_ALL`. |
 | EVM | Hash of the unsigned EIP-1559 transaction (chain id, nonce, to, value, data, fees) |
 | Solana | Hash of the serialized transaction message |
 
@@ -222,13 +223,25 @@ signs an opaque transaction from the agent. It does one of two things:
 The decoded transaction must do the authorized action and nothing more:
 
 - Bitcoin: the inputs are own coins. The outputs are the HTLC output and own
-  change. No other output exists.
+  change. No other output exists. Every signature commits to all inputs and all
+  outputs: the sighash type is `SIGHASH_DEFAULT` (0x00) or `SIGHASH_ALL`
+  (0x01). The signer rejects a PSBT that requests `SIGHASH_NONE`,
+  `SIGHASH_SINGLE` or `ANYONECANPAY`. With those types another party could
+  change the transaction after the signature.
 - EVM: one call to the pinned HTLC contract. A token lock can need one earlier
-  `approve` transaction. That approval is for the exact leg amount. The signer
-  never signs an unlimited allowance.
+  `approve` transaction. That approval is for the exact gross debit of the
+  lock. For a normal token, the gross debit is the leg amount. For a token with
+  `transfer_fee`, the signer computes the gross debit from the fee parameters
+  that it reads on the chain, so that the net amount in the lock equals the
+  terms (S8). The signer never signs an unlimited allowance.
 - Solana: only the pinned HTLC program, the token program, the associated token
-  account program and the compute budget program appear. No other instruction
-  exists.
+  account program and the compute budget program appear. Two native programs
+  are also allowed, each only when the selected mode needs it and each with
+  strict argument checks: the System Program `AdvanceNonceAccount` instruction
+  as the first instruction, for a durable-nonce refund (section 8.6), with the
+  pinned nonce account and authority; and the Ed25519 program, for tier E2
+  (section 9), with exactly the warrant message and the warrant key. No other
+  instruction exists.
 
 ### 4.3 Signing suites
 
