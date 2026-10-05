@@ -2,7 +2,7 @@
 
 Version 0.1 · 2026-09-18 · Draft for the hackathon PoC (Proof of Concept). Companion to `bsdg-poc-design.md` and `bsdg-poc-naming-and-description.md`.
 
-Abbreviations: LLM — Large Language Model; DSL — Domain-Specific Language; ZK — Zero-Knowledge; zkVM — zero-knowledge virtual machine; FFD (ФФД) — Russian fiscal document format; OFD (ОФД) — fiscal data operator; COSE — CBOR Object Signing and Encryption; CBOR — Concise Binary Object Representation; EIP — Ethereum Improvement Proposal; TCB — Trusted Computing Base; PCC — Proof-Carrying Code.
+Abbreviations: LLM — Large Language Model; DSL — Domain-Specific Language; ZK — Zero-Knowledge; zkVM — zero-knowledge virtual machine; FFD (ФФД) — Russian fiscal document format; OFD (ОФД) — fiscal data operator; COSE — CBOR Object Signing and Encryption; CBOR — Concise Binary Object Representation; EIP — Ethereum Improvement Proposal; TCB — Trusted Computing Base; PCC — Proof-Carrying Code; A2A — Agent-to-Agent protocol.
 
 ---
 
@@ -333,6 +333,8 @@ Two signature layers, two purposes:
 
 - **Oracle signature** — EIP-712 typed data over `WarrantDigest{wallet, merchant, amount, policy_hash, receipt_hash, decision, nonce, expires_at, bundle_hash}`. secp256k1, verified on-chain with `ecrecover`.
 - **Mnemonik attestation** — COSE_Sign1 over the whole bundle (including the oracle signature) by the Mnemonik identity, algorithm ES256K (COSE alg −47, RFC 8812) so one key family serves both layers. Provides provenance and timestamp; not checked on-chain in step 1.
+
+A bundle holds receipt data, so a counterparty (for example, an auditor) can receive it sealed over Mnemonik A2A. Available now in Mnemonik: sealed A2A uses sign-encrypt-sign. The sender signs the bundle and the recipient identities, encrypts that signed message to the recipients, then signs the ciphertext. The recipient therefore holds a sender signature over the plaintext that names it as recipient. It cannot forward the bundle to another party as a message addressed to that party. Warrant does not depend on this layer for on-chain checks.
 
 ### 9.6 Decision mapping
 
