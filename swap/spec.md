@@ -166,6 +166,7 @@ sequenceDiagram
   RS->>B: observe s
   RS->>A: claim leg A with s (exit action, never blocked)
   Note over IS,RS: on timeout, each side refunds its own leg (exit action)
+```
 
 ---
 
@@ -222,13 +223,28 @@ signs an opaque transaction from the agent. It does one of two things:
 The decoded transaction must do the authorized action and nothing more:
 
 - Bitcoin: the inputs are own coins. The outputs are the HTLC output and own
-  change. No other output exists.
-- EVM: one call to the pinned HTLC contract. A token lock can need one earlier
-  `approve` transaction. That approval is for the exact leg amount. The signer
-  never signs an unlimited allowance.
-- Solana: only the pinned HTLC program, the token program, the associated token
-  account program and the compute budget program appear. No other instruction
-  exists.
+  change. No other output exists. Every signature commits to the complete
+  transaction (S26).
+- EVM: one call to the pinned HTLC contract, or to the pinned wrapper contract
+  under tier E2 (section 9). A token lock can need one earlier `approve`
+  transaction. That approval is for the exact gross debit: the amount that puts
+  the agreed net leg amount into the lock after any transfer fee (S8). Without a
+  transfer fee, the gross debit equals the leg amount. The signer never signs an
+  unlimited allowance.
+- Solana: the allowed instructions depend on the profile and the enforcement
+  tier. Every instruction must be in this list. The signer checks the arguments
+  of each instruction:
+
+  | Program | When allowed | Strict check |
+  |---|---|---|
+  | Pinned HTLC program | Always | Exactly one instruction; accounts and arguments equal the intent |
+  | Token program pinned for the asset (SPL Token or Token-2022) | Token legs | Mint, amount and destination equal the intent |
+  | Associated token account program | When the escrow or the receiver account does not exist yet | Idempotent create for the expected owner and mint only |
+  | Compute budget program | Always | Compute unit limit and price inside the profile bounds |
+  | System program | Durable-nonce refund method only (section 8.6) | Only `AdvanceNonceAccount`, as the first instruction, on the signer's pinned nonce account |
+  | Ed25519 program | Tier E2 only (section 9) | One verification of the pinned warrant key over the warrant digest |
+
+  No other instruction exists.
 
 ### 4.3 Signing suites
 
@@ -430,7 +446,7 @@ cannot verify SHA-256 with a length check in its lock is not supported.
 | S5 | The claim pays a receiver fixed at lock time. It never pays the caller or the transaction signer. | Anyone who sees `s` claims the funds |
 | S6 | The refund pays a `refund_to` account fixed at lock time | A third party redirects the refund |
 | S7 | The lock contract identity matches the pinned identity (section 8.4) | A look-alike contract that never pays out |
-| S8 | The observed amount, asset and decimals equal the terms. For tokens with transfer fees, the net amount in the lock equals the terms. | Short payment |
+| S8 | The observed amount, asset and decimals equal the terms. For a token with a transfer fee, the signer reads the fee configuration on chain, computes the gross debit that delivers the agreed net amount, and checks the net amount in the lock. The terms state whether the claim payout is gross or net of a second fee. | Short payment |
 | S9 | The asset identity comes from the chain, not from the counterparty | A fake token with the same symbol |
 | S10 | The lock binds `swap_id` where the chain allows it, and the signer keeps a consumed set of swap ids | Replay of one lock or one warrant against a second swap |
 
@@ -509,6 +525,7 @@ can remove a lock that a party already relied on.
 | S23 | The `evaluator_id` equals the pinned evaluator build | A changed evaluator |
 | S24 | The decoded transaction matches the warrant exactly (section 4.2) | A valid warrant on a different transaction |
 | S25 | The ledger state that feeds ledger facts has a monotonic counter and survives restart. Lost state gives `Unknown`. | A reset of the daily limit by a restart |
+| S26 | Every signature commits to the complete authorized transaction. On Bitcoin, the signer uses only `SIGHASH_DEFAULT` or `SIGHASH_ALL`. It never uses `SIGHASH_NONE`, `SIGHASH_SINGLE` or `ANYONECANPAY`. | A third party changes the inputs or outputs after the signature and redirects the signer's coins |
 
 ---
 
@@ -607,7 +624,7 @@ knowingly.
 
 | Chain | What the policy signer receives and signs |
 |---|---|
-| Bitcoin | A PSBT (BIP 174 or BIP 370). The signer computes the BIP 341 sighash itself. It never signs a sighash that the agent supplies. |
+| Bitcoin | A PSBT (BIP 174 or BIP 370). The signer computes the BIP 341 sighash itself. It never signs a sighash that the agent supplies. It ignores any sighash type in the PSBT and uses `SIGHASH_DEFAULT` or `SIGHASH_ALL` only (S26). |
 | EVM | A typed transaction (EIP-2718, EIP-1559) with the EIP-155 chain id. Token allowances are exact. EIP-2612 `permit` or Permit2 is acceptable with an exact amount and a short deadline. |
 | Solana | A transaction message. The signer resolves address lookup tables and decodes every instruction before it signs. |
 
@@ -659,7 +676,7 @@ flowchart LR
   subgraph Policy signer host or TEE
     F[Fact builder and chain profiles]
     E[Verified evaluator]
-    S[Safety checks S1-S25]
+    S[Safety checks S1-S26]
     K[(Keys: funding, identity, secret s)]
     W[Watchers]
     G[Ledger]
@@ -729,7 +746,7 @@ proof of the evaluator does not cover them (section 11).
 |---|---|---|
 | Evaluator: `evaluate3` returns `Allow` only if every completion of unknowns satisfies the rule | Proved | Verus, as for the invoice evaluator |
 | Timeout arithmetic: the clock conversion is conservative and the S11 inequality is computed correctly | Proved (target) | Verus over integer bounds; small and closed |
-| Safety checks S1 to S25 | Tested | One negative test per check; mutation tests on each check |
+| Safety checks S1 to S26 | Tested | One negative test per check; mutation tests on each check |
 | Chain profiles and transaction decoders | Tested | Regression tests on regtest, local EVM and local Solana validators; fault injection (section 13.3) |
 | Cryptographic libraries, node software, HSM or KMS | Assumed | Pinned versions |
 | The chains' consensus and the clock bounds in the profile | Assumed | Measured data with a source and a date |
@@ -767,7 +784,7 @@ Do not add swap atoms to the existing `Rule`. Add three crates:
 | Crate | Contents | Depends on | Does not depend on |
 |---|---|---|---|
 | `swap-verified` | `SwapRule`, `SwapFacts3`, `evaluate3`, timeout arithmetic, Verus proofs | `vstd`, optional `serde` | `k256`, RISC Zero, Mnemonik |
-| `swap-core` | Chain profile interface, fact builder, safety checks S1 to S25, warrant payload (JCS), transaction decoders | `swap-verified`, chain parsing libraries | RISC Zero, Mnemonik, network clients |
+| `swap-core` | Chain profile interface, fact builder, safety checks S1 to S26, warrant payload (JCS), transaction decoders | `swap-verified`, chain parsing libraries | RISC Zero, Mnemonik, network clients |
 | `swap-signer` | The policy signer binary: keys, watchers, ledger, RPC and node clients, Ask queue, anchoring | `swap-core`, `mnemonic-core` (COSE, sealed A2A, anchoring), KMS adapters | RISC Zero |
 
 Rules for the layout:
@@ -788,7 +805,7 @@ Rules for the layout:
 |---|---|---|
 | W0 | Review this specification. Decide questions 1 to 3 of section 14. | Owner sign-off; schemas frozen |
 | W1 | `swap-verified`: atoms, evaluator, timeout arithmetic, proofs | Verus passes with `--no-cheating`; every deliberate mutation rejected, including "Ask treated as Allow" |
-| W2 | `swap-core`: Bitcoin, EVM and Solana profiles; checks S1 to S25 | One failing test per check without the check; fixtures for each risk flag |
+| W2 | `swap-core`: Bitcoin, EVM and Solana profiles; checks S1 to S26 | One failing test per check without the check; fixtures for each risk flag |
 | W3 | `swap-signer` at tier E0: keys, watchers, ledger, warrants anchored through Mnemonik | Two local agents complete a swap on regtest, a local EVM node and a local Solana validator |
 | W4 | Venue adapter, for example the Flo.tc `UserSDK` | Testnet swap between two agents; secret-hygiene audit of logs, prompts and transcripts |
 | W5 | Tier E1 co-signing; external security review | Review closed; capped mainnet pilot |
