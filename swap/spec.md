@@ -12,7 +12,8 @@ Companion documents: [the Warrant whitepaper](../whitepaper.md),
 [the evaluator proof](../policy-execution/verified/README.md),
 [the earlier technical design (child-wallet proof of concept)](../tech-design.md).
 The first integration target is the Flo.tc settlement core, through the
-"Agentic Swap Spec v0.1". Mnemonik supplies identity, sealed negotiation and
+"Agentic Swap Spec v0.1". Mnemonik supplies identity, a generic signed sealed
+message channel and
 anchoring.
 
 Abbreviations: A2A — agent to agent; BIP — Bitcoin Improvement Proposal;
@@ -76,11 +77,14 @@ Not in scope for version 1:
 |---|---|
 | Initiator (I) | Generates the secret `s` and the hashlock `H = h(s)`. Locks first. |
 | Responder (R) | Locks second, after the initiator lock is final. |
-| Owner | The human or organization that approves the policy for one party. |
-| Policy signer | The process that holds the keys of one party and enforces its policy. |
+| Agent | The LLM process that negotiates and proposes actions for one party. It holds no key and no funds. |
+| Owner | The human or organization that the agent acts for. It owns the funds and the keys, and approves the policy. |
+| Policy signer | The owner's component that holds the owner's keys and enforces the owner's policy. It runs in the owner's environment (section 10.1). |
 | Venue | The settlement engine and discovery service, for example Flo.tc. |
 
-Each party has its own owner, policy and policy signer. No party trusts the
+Each party has its own owner, policy and policy signer. "Party" means the owner
+with its agent and its policy signer. Funds never move to the agent or to a third
+party; they stay at the owner's address until a lock. No party trusts the
 other party's signer. A party trusts the other party's warrant only as far as it
 can verify that warrant (section 6.4).
 
@@ -184,6 +188,49 @@ sequenceDiagram
   Note over IS,RS: on timeout, each side refunds its own leg (exit action)
 ```
 
+### 3.5 Negotiation messages
+
+The negotiation uses the generic Mnemonik signed sealed message
+(`SIGNED_INNER_V1`, planned in the Mnemonik `work/agentic-swap/` tech spec).
+Mnemonik signs the plaintext, seals it for the recipient and signs the sealed
+bytes. It checks the protocol tag, the session, the previous-message hash, the
+nonce, the recipient and the expiry. It does not know the swap message types.
+This section defines them. They live in `swap-core` (section 13.2), so the swap
+needs no change to `mnemonic-core`.
+
+- Protocol tag: `warrant.swap.negotiation.v1`.
+- Session: one A2A `context_id` per negotiation.
+- The policy signer signs every message with the owner's identity key
+  (section 3.4). The agent proposes only the `body`.
+
+The `body` of each message:
+
+| Kind | Body |
+|---|---|
+| `rfq` | `kind`; give leg and take leg without price (CAIP-2 chain, CAIP-19 asset, amount range in base units); hash function `sha256`; venue |
+| `quote`, `counter` | `kind`; `intent_id`; full terms: both legs (CAIP-2, CAIP-19, CAIP-10 accounts, base-unit amounts), Bitcoin `claim_key` and `refund_key`, proposed timelocks, `valid_until` |
+| `accept` | `kind`; `intent_id`; `terms_hash`; hash of the accepted `quote` or `counter` |
+| `reject` | `kind`; `intent_id`; fixed reason code |
+| `expire` | `kind`; `intent_id` |
+
+- `intent_id = blake3(JCS(rfq body))`. It stays the same for the whole
+  negotiation.
+- `terms_hash = blake3(JCS(terms))` for the terms of one `quote` or `counter`.
+- Amounts are integers in base units. Free text is not part of the terms.
+- The own selecting fields (receive account, refund account, Bitcoin keys) come
+  from the policy, never from the agent (section 5.2).
+
+`swap-core` applies the transcript rules after the Mnemonik checks pass:
+
+1. `rfq` comes first, then `quote`, then any number of `counter`, then one of
+   `accept`, `reject` or `expire`.
+2. The parties alternate after `rfq`.
+3. `accept` references the hash of the last `quote` or `counter`, and its
+   `terms_hash` equals the terms of that message.
+4. No message follows a terminal kind.
+5. The transcript hash is the blake3 hash of the terminal message JCS. The
+   `prev_hash` chain covers every earlier message.
+
 ---
 
 ## 4. The swap warrant
@@ -199,7 +246,7 @@ SwapWarrant {
   action:          "accept" | "lock" | "reveal" | "claim" | "refund"
   swap_id:         32 bytes, hex
   terms_hash:      blake3(JCS(agreed terms))
-  inner_sig_hash:  blake3(exact COSE_Sign1 bytes of the inner ACCEPT message)
+  inner_sig_hash:  blake3(exact inner COSE_Sign1 bytes of the ACCEPT message, section 3.5)
                                          same value for both parties; links negotiation to warrant
   leg:             Leg                    the leg that this action touches; absent for accept
   tx_binding:      TxBinding              absent for accept
@@ -840,8 +887,8 @@ flowchart LR
   W --> N
 ```
 
-- The **policy signer** is a separate process with its own operating-system user,
-  or a TEE. The agent talks to it through one local interface. The agent never
+- The **policy signer** is the owner's component: a separate process with its own
+  operating-system user, a TEE, or the owner's own wallet (section 10.1). The agent talks to it through one local interface. The agent never
   sees a key or the secret `s`.
 - The **evaluator** is native Rust inside the policy signer. A WASM build of the
   same source serves verifiers: the counterparty (section 6.4) and the audit view.
@@ -853,6 +900,20 @@ flowchart LR
 The verified evaluator is the smallest part of the TCB. The fact builder, the
 chain profiles, the safety checks and the transaction decoder are larger. A
 proof of the evaluator does not cover them (section 12).
+
+### 10.1 Deployment models
+
+The policy signer always runs in the owner's own environment. The venue or any
+other third party never runs it, because that would be custody. The agent never
+holds a key or funds.
+
+| Owner and agent | Where the policy signer runs | Do funds move before a lock? |
+|---|---|---|
+| A human trades in the venue application | The human's own wallet (browser or hardware wallet). Each approval is a `human-review` warrant. | No |
+| A company runs an agent | A separate process next to the agent on the company's own infrastructure, or the company's HSM, KMS or TEE. The agent sends requests through a local interface. | No. The wallet stays the company's. |
+| A human delegates to an agent, with a budget wallet | The signer controls a dedicated wallet of the human, funded with a budget | Only from the human's main wallet to the human's own budget wallet. Works on every chain. |
+| A human delegates to an agent, with an on-chain limit | Funds stay in the human's account. The signer has only a limited key: an ERC-4337 or ERC-7579 session key or a Safe module on EVM, or a Squads spending limit on Solana. | No. Not available on Bitcoin. |
+| A high-value account (tier E1) | A two-party account of the owner's device and the policy signer (section 9) | No |
 
 ---
 
@@ -929,8 +990,8 @@ Do not add swap atoms to the existing `Rule`. Add three crates:
 | Crate | Contents | Depends on | Does not depend on |
 |---|---|---|---|
 | `swap-verified` | `SwapRule`, `SwapFacts3`, `evaluate3`, timeout arithmetic, Verus proofs | `vstd`, optional `serde` | `k256`, RISC Zero, Mnemonik |
-| `swap-core` | Chain profile interface, fact builder, pure check functions for S1 to S3, S5 to S15, S18, S20 to S24, S26 and S27 over facts and state that the signer supplies, warrant payload (JCS), transaction decoders | `swap-verified`, chain parsing libraries | RISC Zero, Mnemonik, network clients |
-| `swap-signer` | The policy signer binary: keys, watchers, ledger, RPC and node clients, Ask queue, anchoring; operational duties S4, S16, S17, S19 and S25; durable state for S10, S21 and S22 | `swap-core`, `mnemonic-core` (COSE, sealed A2A, anchoring), KMS adapters | RISC Zero |
+| `swap-core` | Negotiation message types, intent and transcript rules (section 3.5), chain profile interface, fact builder, pure check functions for S1 to S3, S5 to S15, S18, S20 to S24, S26 and S27 over facts and state that the signer supplies, warrant payload (JCS), transaction decoders | `swap-verified`, chain parsing libraries | RISC Zero, Mnemonik, network clients |
+| `swap-signer` | The policy signer binary: keys, watchers, ledger, RPC and node clients, Ask queue, sealing and opening negotiation messages and anchoring through `mnemonic-core`; operational duties S4, S16, S17, S19 and S25; durable state for S10, S21 and S22 | `swap-core`, `mnemonic-core` (COSE, sealed A2A, anchoring), KMS adapters | RISC Zero |
 
 Rules for the layout:
 
