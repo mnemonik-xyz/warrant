@@ -10,7 +10,7 @@ that profile is not supported.
 
 Companion documents: [the Warrant whitepaper](../whitepaper.md),
 [the evaluator proof](../policy-execution/verified/README.md),
-[the technical design](../tech-design.md).
+[the earlier technical design (child-wallet proof of concept)](../tech-design.md).
 The first integration target is the Flo.tc settlement core, through the
 "Agentic Swap Spec v0.1". Mnemonik supplies identity, sealed negotiation and
 anchoring.
@@ -39,8 +39,9 @@ splits the work:
 - The agent **proposes** each action.
 - A small **policy signer** decides. It holds the keys. It builds facts, runs a
   verified evaluator and signs only on `Allow`.
-- Each decision produces a **warrant**: a signed record of the action, the facts,
-  the policy hash and the decision. Mnemonik anchors the record.
+- Each `Allow` decision produces a **warrant**: a signed record of the action,
+  the facts, the policy hash and the decision. Mnemonik anchors the warrant.
+  `Deny` and `Ask` produce separate decision records (section 4.1).
 
 The HTLC gives atomicity: either both legs settle or both refund. Warrant adds
 authorization: no leg locks unless the owner's policy permits the trade. Warrant
@@ -62,9 +63,10 @@ Not in scope for version 1:
 
 - Multi-hop routes, partial fills and order books. Discovery is the job of the
   settlement venue.
-- Adaptor-signature swaps (PTLC). Section 12 lists them as planned work.
+- Adaptor-signature swaps (PTLC). Section 14, question 8, lists them as planned work.
 - Price discovery. The policy bounds the price. It does not set the price.
-- The HTLC free-option problem. Section 10 bounds it. It does not remove it.
+- The HTLC free-option problem. Section 11 and the `CollateralAtLeast` atom
+  (section 6.2) bound it. They do not remove it.
 
 ## 3. The universal model
 
@@ -103,12 +105,23 @@ Lock {
   hashlock:    32 bytes               H = sha256(s)
   preimage_len: 32                    enforced by the lock itself
   timelock:    { kind, value, clock } absolute height, absolute time or relative
-  swap_id:     32 bytes               unique per swap; bound in the lock where the chain allows
+  swap_id:     32 bytes               unique per swap
+  lock_id:     32 bytes               sha256(swap_id ‖ leg ‖ sender); keys the lock on chain
+  claim_key:   32-byte x-only key     Bitcoin only; bound in the terms
+  refund_key:  32-byte x-only key     Bitcoin only; bound in the terms
 }
 ```
 
 Leg A is the initiator's asset on chain A. Leg B is the responder's asset on
 chain B. Chain A and chain B can be the same chain.
+
+Each lock has its own key, `lock_id`. The EVM storage key and the Solana escrow
+seeds use `lock_id`, never `swap_id` alone. The contract or program derives the
+key from the funding sender, so a third party cannot take the key first. The two
+legs of a same-chain swap therefore cannot collide.
+
+Version 1 allows a relative timelock on leg A only. Leg B always uses an absolute
+timelock (section 7.3).
 
 The CAIP identifiers make the warrant chain-agnostic. A policy names chains,
 assets and accounts in one format for every chain.
@@ -117,9 +130,9 @@ assets and accounts in one format for every chain.
 
 | # | Action | Who | Effect | Policy can deny? |
 |---|---|---|---|---|
-| 1 | `accept` | I and R | Sign the agreed terms (the ACCEPT message) | Yes |
+| 1 | `accept` | I and R | Authorize the agreed terms. The accepting party's signer signs the ACCEPT message only on `Allow`. The other party's signer issues its warrant over the received ACCEPT. | Yes |
 | 2 | `lock` | I, then R | Fund the own leg | Yes |
-| 3 | `reveal` | I | Claim leg B, which publishes `s` | Yes, until the deadline |
+| 3 | `reveal` | I | Claim leg B, which publishes `s` | Yes, before the first broadcast only (S12). Later broadcasts of the same claim are exit actions. |
 | 4 | `claim` | R | Claim leg A with `s` | **No** |
 | 5 | `refund` | I or R | Recover the own leg after its timelock | **No** |
 
@@ -150,11 +163,14 @@ sequenceDiagram
   participant A as Chain A
   participant B as Chain B
 
-  IA->>RA: negotiate over sealed A2A (RFQ, QUOTE, COUNTER, ACCEPT)
-  IA->>IS: request accept warrant
-  RA->>RS: request accept warrant
+  IA->>IS: propose RFQ, QUOTE or COUNTER
+  IS-->>IA: inner message signed with the identity key
+  IA->>RA: sealed A2A (RFQ, QUOTE, COUNTER)
+  RA->>RS: request accept of the last QUOTE or COUNTER
+  RS-->>RA: signed ACCEPT and warrant(accept), or Ask/Deny
+  RA->>IA: ACCEPT over sealed A2A
+  IA->>IS: request accept warrant for the received ACCEPT
   IS-->>IA: warrant(accept) or Ask/Deny
-  RS-->>RA: warrant(accept) or Ask/Deny
   IA->>IS: request lock A
   IS->>A: lock leg A (H, T_A, receiver R)
   RS->>A: observe lock A to finality
@@ -183,24 +199,30 @@ SwapWarrant {
   action:          "accept" | "lock" | "reveal" | "claim" | "refund"
   swap_id:         32 bytes, hex
   terms_hash:      blake3(JCS(agreed terms))
-  inner_sig_hash:  blake3(signed ACCEPT message)    links negotiation to warrant
+  inner_sig_hash:  blake3(exact COSE_Sign1 bytes of the inner ACCEPT message)
+                                         same value for both parties; links negotiation to warrant
   leg:             Leg                    the leg that this action touches; absent for accept
   tx_binding:      TxBinding              absent for accept
+  fee_ceiling:     native units           highest fee that a fee-only variant may pay (section 4.2)
   facts:           [Fact]                 every fact the evaluator read, with provenance
   policy_hash:     32 bytes               hash of the approved policy term
   policy_version:  integer
   evaluator_id:    32 bytes               hash of the evaluator build, or "human-review"
+  owner_approval:  signature              pinned owner key over this payload without this field;
+                                         required for "human-review", else absent (S23)
   decision:        "allow"                only Allow produces a signed warrant
   reasons:         [string]               fixed reason codes, never model text
-  valid_after:     chain time of the leg chain
-  valid_until:     chain time of the leg chain
+  valid_after:     chain time of the leg chain; for accept, UTC time (RFC 3339)
+  valid_until:     chain time of the leg chain; for accept, UTC time no later than
+                                         the ACCEPT `expires_at`
   nonce:           16 random bytes
   prev_warrant:    hash of the previous warrant for this swap and party, or null
 }
 ```
 
-`Deny` and `Ask` results are records, not warrants. The policy signer stores them
-and anchors them. It signs them with a different `protocol` value
+`Deny` and `Ask` results are records, not warrants. The policy signer stores them.
+Whether it also anchors them, and in which form, is open question 6 (section 14).
+It signs them with a different `protocol` value
 (`warrant.swap.decision.v1`). A verifier can never confuse them with an
 authorization.
 
@@ -210,9 +232,28 @@ The warrant binds the exact transaction that the signer signs:
 
 | Chain family | `TxBinding` content |
 |---|---|
-| Bitcoin | Unsigned transaction id of the PSBT and every BIP 341 sighash that the signer produces |
-| EVM | Hash of the unsigned EIP-1559 transaction (chain id, nonce, to, value, data, fees) |
-| Solana | Hash of the serialized transaction message |
+| Bitcoin | Unsigned transaction id of the PSBT and every sighash that the signer produces. For `warrant(lock)`, also the txid and sighash of the prepared refund (section 8.6). |
+| EVM | EIP-1559 signing hash `keccak256(0x02 ‖ rlp([chain_id, nonce, max_priority_fee_per_gas, max_fee_per_gas, gas_limit, to, value, data, access_list]))`; the access list is empty. The EIP-712 digest of an EIP-2612 `permit`, when one replaces the `approve` (section 8.7). Under tier E1: the EIP-712 `SafeTx` hash (Safe nonce included, `operation` = CALL) or the ERC-4337 `userOpHash`. |
+| Solana | Hash of the serialized transaction message. Under tier E1: the hash of the Squads vault transaction message that the proposal executes. |
+
+**Fee raises.** A fee raise (S19) changes the transaction and its hash. Each
+warrant for a transaction therefore states a `fee_ceiling`. These changes are
+fee-only:
+
+- EVM: `max_fee_per_gas` and `max_priority_fee_per_gas`, with the same nonce;
+- Solana: the compute unit price and the recent blockhash;
+- Bitcoin: a lower own change output under replace-by-fee, or a child-pays-for-parent
+  child that spends only an own output or the anchor output.
+
+For an entry action, a fee-only variant inside the ceiling stays covered by the
+same warrant. The signer records the hash of each signed variant. S21 counts all
+variants of one transaction as one use.
+
+After the signer broadcasts a `reveal`, `s` is public. From then on, every
+rebroadcast, fee raise or replacement of that claim is an exit action (S12).
+Every fee raise of an exit action is also an exit action. The signer issues a
+new exit warrant for each such transaction, with `prev_warrant` set to the
+warrant that it replaces. The fee limit for exits is the reserve of S15.
 
 **The agent proposes. The signer builds or decodes.** The policy signer never
 signs an opaque transaction from the agent. It does one of two things:
@@ -222,12 +263,21 @@ signs an opaque transaction from the agent. It does one of two things:
 
 The decoded transaction must do the authorized action and nothing more:
 
-- Bitcoin: the inputs are own coins. The outputs are the HTLC output and own
-  change. No other output exists. Every signature commits to the complete
-  transaction (S26).
+- Bitcoin:
+  - `lock`: the inputs are own coins. The outputs are the HTLC output and own
+    change.
+  - `claim` and `refund`: one input is the lock outpoint of this swap, spent
+    through the expected leaf. Any other inputs are own confirmed coins for the
+    fee. The outputs are one output to the fixed receiver or `refund_to`, own
+    change and, for a prepared refund, one pay-to-anchor output (section 8.6).
+  - A fee-raising child spends only an own output or the anchor output, plus own
+    confirmed coins. It pays only to own change.
+  - No other input or output exists. Every signature commits to the complete
+    transaction (S26).
 - EVM: one call to the pinned HTLC contract, or to the pinned wrapper contract
-  under tier E2 (section 9). A token lock can need one earlier `approve`
-  transaction. That approval is for the exact gross debit: the amount that puts
+  under tier E2 (section 9). A token lock can need one earlier `approve`, with
+  the pinned HTLC or wrapper as spender, or one exact EIP-2612 `permit`
+  (section 8.7). The approval is for the exact gross debit: the amount that puts
   the agreed net leg amount into the lock after any transfer fee (S8). Without a
   transfer fee, the gross debit equals the leg amount. The signer never signs an
   unlimited allowance.
@@ -237,34 +287,47 @@ The decoded transaction must do the authorized action and nothing more:
 
   | Program | When allowed | Strict check |
   |---|---|---|
-  | Pinned HTLC program | Always | Exactly one instruction; accounts and arguments equal the intent |
-  | Token program pinned for the asset (SPL Token or Token-2022) | Token legs | Mint, amount and destination equal the intent |
+  | Pinned HTLC program, or the pinned wrapper program under tier E2 (section 9) | Always | Exactly one such instruction; accounts and arguments equal the intent. Under E2, the wrapper calls the pinned HTLC through cross-program invocation. |
+  | Token program pinned for the asset (SPL Token or Token-2022) | Token legs | Mint, amount and destination equal the intent. Token-2022 legs use `TransferChecked`, or `TransferCheckedWithFee` with the expected fee when the transfer fee extension is set. |
   | Associated token account program | When the escrow or the receiver account does not exist yet | Idempotent create for the expected owner and mint only |
   | Compute budget program | Always | Compute unit limit and price inside the profile bounds |
-  | System program | Durable-nonce refund method only (section 8.6) | Only `AdvanceNonceAccount`, as the first instruction, on the signer's pinned nonce account |
-  | Ed25519 program | Tier E2 only (section 9) | One verification of the pinned warrant key over the warrant digest |
+  | System program | Durable-nonce refund method only (section 8.6) | Only `AdvanceNonceAccount`, as the first instruction, on the nonce account that the signer pinned for this prepared refund |
+  | Ed25519 program | Tier E2 only (section 9) | One verification of the pinned warrant key over the prefixed warrant digest (section 4.3) |
 
   No other instruction exists.
+
+  An escrow under the Token-2022 transfer fee extension keeps withheld fees, and
+  `CloseAccount` fails while they remain. The pinned HTLC program harvests them
+  (`HarvestWithheldTokensToMint`) before it closes the escrow, or it does not
+  close the escrow. The profile has a claim and refund regression test for each
+  Token-2022 extension that a policy can allow.
 
 ### 4.3 Signing suites
 
 | Suite | Key | Use | Status |
 |---|---|---|---|
 | COSE_Sign1, EdDSA (Ed25519) | Mnemonik identity of the party | Primary warrant signature; anchored by Mnemonik | Mnemonik signing available now; swap warrant planned |
-| EIP-712, secp256k1 | EVM key of the policy signer | Optional second signature for on-chain checks on EVM (section 9) | Planned |
-| Ed25519 instruction | Same Ed25519 key | Optional on-chain check on Solana through the Ed25519 program | Planned |
+| EIP-712, secp256k1 | A dedicated EVM warrant key | Optional second signature for on-chain checks on EVM (section 9) | Planned |
+| Ed25519 instruction | A dedicated Ed25519 warrant key | Optional on-chain check on Solana through the Ed25519 program. The checked message is the fixed ASCII prefix `warrant.swap.v1/ed25519-ix` followed by the 32-byte warrant digest. | Planned |
 
-The two keys of one party must be bound to each other by a signed binding
-record. Mnemonik plans this binding as "dual-key identity".
+The two warrant keys sign nothing else. No agent-facing tool can reach them. The
+identity key is not a warrant key: Mnemonik tools already use it to sign raw
+bytes that a caller chooses (for example `mnemonic_prove_identity`). Each warrant
+key is bound to the identity by a signed binding record. Mnemonik plans this
+binding as "dual-key identity" (`KEY_BINDING_V1`).
 
 ### 4.4 Chain of records
 
-For one swap and one party, the records form a hash chain through
+For one swap, the records of each party form a hash chain through
 `prev_warrant`:
 
 ```text
-ACCEPT message → warrant(accept) → warrant(lock) → warrant(reveal) → warrant(claim | refund)
+Initiator: ACCEPT message → warrant(accept) → warrant(lock) → warrant(reveal), warrant(refund) or both
+Responder: ACCEPT message → warrant(accept) → warrant(lock) → warrant(claim), warrant(refund) or both
 ```
+
+Fee raises and rebroadcasts add exit warrants to the end of the chain
+(section 4.2).
 
 The policy signer anchors each record through Mnemonik A2A attestation, in the
 negotiation `context_id`. An auditor can then answer one question from one
@@ -312,7 +375,7 @@ method. The policy names the minimum method for each value band.
 | Method | Strength | Notes |
 |---|---|---|
 | Own full node | Strongest | Bitcoin: own `bitcoind`. EVM: own execution and consensus client. Solana: own RPC node. |
-| Light client proof | Strong | Bitcoin: block headers plus a Merkle proof of the transaction. EVM: `eth_getProof` (EIP-1186) against a finalized header from a light client. |
+| Light client proof | Strong | Bitcoin: block headers plus a Merkle proof of the transaction. The verifier takes the most-work header chain from several peers. It hashes the full transaction bytes to the txid. It rejects a 64-byte transaction, and it checks the proof depth against a Merkle proof of the coinbase transaction in the same block (CVE-2017-12842). EVM: `eth_getProof` (EIP-1186) against a finalized header from a light client. |
 | Quorum of independent RPC providers | Medium | N of M providers must agree on the block hash and the value. |
 | One third-party RPC | Weak | Allowed only below a policy value limit. |
 
@@ -355,9 +418,9 @@ Generic atoms. Other domains can reuse them.
 | `ChainIn(set)` | The leg chain (CAIP-2) is in the set |
 | `AssetIn(set)` | The leg asset (CAIP-19) is in the set |
 | `CounterpartyIn(set)` | The counterparty identity is in the set, by a signed credential |
-| `CounterpartyNotListed(list_hash)` | A signed list snapshot with this hash does not contain the counterparty |
+| `CounterpartyNotListed(list_hash)` | A signed credential establishes the counterparty identity, and a signed snapshot with this hash is present and valid. Neither the identity nor any counterparty account in the legs (sender, receiver, `refund_to`) is in the snapshot. A missing identity or snapshot makes the atom `Unknown`, never true. |
 | `NotionalAtMost(ref_ccy, amount)` | The derived notional of the trade is at most the amount |
-| `PeriodNotionalAtMost(period, amount)` | Ledger spend in the period plus this trade is at most the amount |
+| `PeriodNotionalAtMost(period, ref_ccy, amount)` | Ledger spend in the period plus this trade, in the reference currency, is at most the amount |
 | `OpenSwapsAtMost(n)` | Open swaps of this party, including this one, are at most n |
 | `EvidenceAtLeast(method)` | Every chain fact uses at least this observation method |
 
@@ -370,7 +433,7 @@ Swap atoms.
 | `TimeoutGapAtLeast(seconds)` | The conservative gap of section 7.3 is at least this value |
 | `RevealWindowAtLeast(seconds)` | Time left before the reveal deadline is at least this value |
 | `FinalityAtLeast(chain, depth)` | The counterparty lock has this depth or the chain's finalized status |
-| `AssetRiskWithin(flags)` | The asset risk flags (section 8.5) are a subset of the allowed flags |
+| `AssetRiskWithin(flags)` | Each risk flag (section 8.5) is present, absent or unknown. True only when every flag outside the allowed set is known to be absent. False when a flag outside the allowed set is present. Otherwise `Unknown`. |
 | `ContractPinned` | The lock contract identity equals a contract that the policy pins |
 | `CollateralAtLeast(bps)` | The counterparty posted collateral of at least `bps` of the notional |
 
@@ -385,12 +448,12 @@ code.
   "all": [
     { "pair_in": [["bip122:…/slip44:0", "eip155:1/erc20:0xA0b8…eB48"]] },
     { "notional_at_most": ["USD", 50000] },
-    { "period_notional_at_most": ["P1D", 200000] },
+    { "period_notional_at_most": ["P1D", "USD", 200000] },
     { "price_deviation_at_most": 50 },
     { "timeout_gap_at_least": 7200 },
     { "finality_at_least": ["bip122:…", 3] },
     { "evidence_at_least": "light_client" },
-    { "asset_risk_within": ["freezable_by_issuer"] },
+    { "asset_risk_within": ["freezable_by_issuer", "pausable", "upgradeable"] },
     { "any": [ { "counterparty_in": ["did:key:z6Mk…"] },
                { "notional_at_most": ["USD", 1000] } ] }
   ]
@@ -399,7 +462,7 @@ code.
 
 In words: BTC for USDC only; at most 50,000 USD per deal and 200,000 USD per
 day; at most 0.5 % from the oracle price; at least two hours of gap; three
-Bitcoin confirmations; light-client evidence; issuer freeze is acceptable; an
+Bitcoin confirmations; light-client evidence; issuer freeze, pause and upgrade are acceptable; an
 unknown counterparty only up to 1,000 USD.
 
 ### 6.4 Verifying the counterparty's warrant
@@ -421,9 +484,16 @@ owner choice. Section 14 lists it as an open question.
 ## 7. Obligatory safety checks
 
 Each check below prevents a known way to lose funds in an HTLC swap. The policy
-signer runs all of them. The policy cannot disable them. Each check is a
-deterministic function of facts. A failed check on an entry action gives `Deny`.
-A failed check on an exit action stops the signer and alerts the owner.
+signer runs all of them. The policy cannot disable them. Each check that gates
+an action is a deterministic function of facts. S4, S16, S17, S19 and S25 are
+operational duties of the signer. A failed check on an entry action gives `Deny`.
+
+A failed check on an exit action rejects only the proposed transaction and alerts
+the owner. The signer then builds the exit transaction itself from the lock
+parameters that it recorded. It signs and broadcasts that transaction before the
+deadline. The watchers start every claim and refund without an agent request. An
+exit never waits for the agent or the owner. A failure on one swap never stops
+the watchers of other swaps.
 
 ### 7.1 Hashlock
 
@@ -443,12 +513,13 @@ cannot verify SHA-256 with a length check in its lock is not supported.
 
 | ID | Check | Loss it prevents |
 |---|---|---|
-| S5 | The claim pays a receiver fixed at lock time. It never pays the caller or the transaction signer. | Anyone who sees `s` claims the funds |
-| S6 | The refund pays a `refund_to` account fixed at lock time | A third party redirects the refund |
+| S5 | The claim pays a receiver fixed at lock time: a stored receiver account on EVM and Solana. It never pays the caller. On Bitcoin, script cannot fix the destination of a spend. Instead, the claim leaf requires a signature by the receiver's 32-byte x-only `claim_key`. On a counterparty lock, the receiver is the checking party's own receive account or key, taken from the policy, never from the agent or the counterparty. The responder checks this on leg A before `lock`. The initiator checks it on leg B before `reveal`. | Anyone who sees `s` claims the funds. The counterparty names its own account as receiver; the party locks or reveals `s` and receives nothing. |
+| S6 | The refund pays a `refund_to` account fixed at lock time. On Bitcoin, the refund leaf requires a signature by the `refund_key`. | A third party redirects the refund |
 | S7 | The lock contract identity matches the pinned identity (section 8.4) | A look-alike contract that never pays out |
 | S8 | The observed amount, asset and decimals equal the terms. For a token with a transfer fee, the signer reads the fee configuration on chain, computes the gross debit that delivers the agreed net amount, and checks the net amount in the lock. The terms state whether the claim payout is gross or net of a second fee. | Short payment |
-| S9 | The asset identity comes from the chain, not from the counterparty | A fake token with the same symbol |
-| S10 | The lock binds `swap_id` where the chain allows it, and the signer keeps a consumed set of swap ids | Replay of one lock or one warrant against a second swap |
+| S9 | The asset identity and its risk flags come from the chain, not from the counterparty. An asset with the `confidential_amount` or `non_transferable` flag (section 8.5) fails this check. | A fake token with the same symbol; an amount that the signer cannot verify; a claim that cannot succeed |
+| S10 | The lock binds `lock_id` where the chain allows it, and the signer keeps a consumed set of swap ids. Each party also keeps a durable consumed set of counterparty lock identities and hashlocks. A lock identity is the Bitcoin outpoint, the EVM contract and escrow key, or the Solana escrow address. The party rejects a counterparty lock or an `H` that already backs another open or closed swap. | Replay of one lock or one warrant against a second swap; one counterparty lock used as the backing lock of two swaps |
+| S27 | Before `lock`, each party confirms that its own receiver on the other leg can receive the asset now. EVM: the token does not block the receiver (for example USDC `isBlacklisted`), and the token is not paused. Solana: the receiver token account exists and is initialized. It is not frozen. It has the leg mint and the expected owner, and the pinned token program owns it. For a Token-2022 mint whose default account state is frozen, the account must already exist and be thawed; the claim must not create it. The initiator repeats this check before `reveal`. | The counterparty claims with `s`, but the own claim fails because the receiver is blocklisted, frozen or created frozen |
 
 ### 7.3 Timelocks
 
@@ -459,26 +530,44 @@ of its chain.
 **S11 — ordering and gap.** The responder requires:
 
 ```text
-earliest_real(T_A) − latest_real(T_B) ≥ D_observe(B) + D_confirm(A) + D_margin
+earliest_real(T_A) − latest_real(T_B) ≥ D_refund(B) + D_observe(B) + D_confirm(A) + D_margin
 ```
 
-- `latest_real(T_B)`: the latest wall-clock moment at which chain B can still
-  accept the initiator's claim.
+- `latest_real(T_B)`: the latest wall-clock moment at which `T_B` passes on
+  chain B.
 - `earliest_real(T_A)`: the earliest wall-clock moment at which chain A can
   accept the initiator's refund.
+- `D_refund(B)`: time for the responder's refund of leg B to become final after
+  `T_B`, at the worst-case fee. A claim that does not expire at `T_B` stays valid
+  until that refund is final. Bitcoin works this way, because script has no
+  "before T" check. The same holds for a contract whose claim has no deadline.
+  `D_refund(B)` is zero only when the lock rejects a claim after `T_B`. The
+  profile states which case applies.
 - `D_observe(B)`: time for the responder to see `s` on chain B.
 - `D_confirm(A)`: time to get the responder's claim on chain A to finality under
-  the profile's worst-case fee and congestion assumption.
+  the profile's worst-case fee, congestion and sequencer-delay (forced inclusion)
+  assumption.
 - `D_margin`: the policy margin.
 
 The conversion from a chain clock to wall-clock time is **conservative**:
 
-- For a height lock, the earliest real time uses the profile's fastest block
-  interval. The latest real time uses the slowest block interval.
-- For a time lock, the bounds use the profile's permitted timestamp drift. On
-  Bitcoin, a time lock compares with the median time past of 11 blocks (BIP 113).
-  That clock lags wall time by about one hour. A block timestamp can also run up
-  to two hours ahead.
+- Blocks arrive at random on Bitcoin. No fixed fastest or slowest block interval
+  exists. For a height lock, the profile bounds the real time of `n` blocks at a
+  stated failure probability (for example 10^-6). It uses the arrival model and
+  the measured change in hash rate. A height lock `T` permits the spend first in
+  block `T + 1`.
+- For a time lock, the bounds use the profile's permitted timestamp drift. A
+  Bitcoin time lock is first valid in a block whose previous 11 blocks have a
+  median time past (MTP) above `T` (BIP 113). MTP moves only when blocks arrive.
+  It lags wall time by about one hour on average, and by more when blocks are
+  slow. The latest real time therefore adds the slow-arrival bound for about six
+  blocks. A block timestamp can lead by at most two hours, so the earliest real
+  time is `T` minus two hours. On an L2, the drift includes the sequencer window
+  (section 8.2).
+- For a relative timelock, the conversion adds the confirmation time of the lock
+  transaction. `earliest_real` and `latest_real` use the observed confirmation of
+  that lock. The responder cannot observe the confirmation of its own lock when
+  it checks S13. Version 1 therefore allows a relative timelock on leg A only.
 
 The agent never computes this gap. The policy signer computes it from the
 profile and the observed chain state.
@@ -495,6 +584,20 @@ responder can refund leg B and also claim leg A with the published `s`. The
 initiator then loses both legs. After the deadline, the initiator must not
 reveal. The initiator waits and refunds leg A after `T_A`.
 
+A failed claim can still publish `s`. The mempool, the RPC path and the block
+producer see it before inclusion. On EVM, a reverted transaction stays in the
+block with its calldata. On Solana, a failed transaction stays in the ledger with
+its instruction data. Before `reveal`, the signer therefore simulates the claim
+against the latest state with the bound gas or compute unit limit. It also
+repeats S5 and S27 for its own receiver on leg B.
+
+S12 applies only to the first broadcast of the claim on chain B. After any
+broadcast that carries `s`, the signer treats `s` as public. Every later
+rebroadcast, fee raise or replacement of that claim is an exit action. This
+includes a rebroadcast after a reorganization removes a confirmed claim. The
+policy does not gate it, and the deadline does not stop it. The watcher keeps the
+claim in the mempool until the claim is final or a refund of leg B is final.
+
 **S13 — the responder's entry window.** The responder locks leg B only when:
 
 - the initiator lock is final (S14);
@@ -509,11 +612,11 @@ can remove a lock that a party already relied on.
 
 | ID | Check | Loss it prevents |
 |---|---|---|
-| S15 | The signer holds a native fee reserve on every chain that it must touch, for a claim and a refund at the worst-case fee. It checks this before `lock`. | The claim or refund cannot pay its fee in time |
-| S16 | A watcher runs for each open swap. The responder watches chain B for `s`, in the mempool and in blocks. Each party watches its own refund time. | A missed claim or a missed refund |
+| S15 | The signer earmarks a native fee reserve per open swap on each chain that the swap touches, for a claim and a refund at the worst-case fee. Before each `lock`, the free native balance covers the earmarks of all open swaps plus this one. No entry action spends earmarked funds. The ledger (S25) records the earmarks. On Solana, the reserve also covers the rent-exempt deposit of each account that the claim or refund creates, and keeps the fee payer above its rent-exempt minimum. On an L2, the worst-case fee includes the L1 data fee. | The claim or refund cannot pay its fee in time |
+| S16 | A watcher runs for each open swap. The responder watches chain B for `s`, in the mempool and in blocks, until leg B is spent and that spend is final. The responder broadcasts the refund of leg B as soon as `T_B` passes. Each party watches its own refund time. | A missed claim or a missed refund |
 | S17 | The signer prepares the refund at lock time where the chain allows it (section 8.6) | The refund depends on the signer being available later |
 | S18 | Exit actions are never subject to the policy (section 3.3) | A policy change or a fault blocks recovery of own funds |
-| S19 | The signer can raise the fee of a pending claim or refund (section 8.6) | A congested or pinned transaction misses its deadline |
+| S19 | The signer can raise the fee of a pending claim or refund (section 8.6). Each fee raise is a new transaction: a Bitcoin replacement or child, an EVM same-nonce replacement, or a Solana resubmission. Section 4.2 states how a warrant covers it. A replacement keeps the same HTLC input or call and the same destination. S21 and S24 apply to each transaction. | A congested or pinned transaction misses its deadline |
 
 ### 7.5 Authorization integrity
 
@@ -522,7 +625,7 @@ can remove a lock that a party already relied on.
 | S20 | The warrant binds chain id, contract, swap id, nonce and validity window | Replay on another chain, contract or swap |
 | S21 | The signer consumes each warrant once | Double use of one authorization |
 | S22 | The policy version only increases. The signer rejects an older policy hash. | Rollback to a weaker policy |
-| S23 | The `evaluator_id` equals the pinned evaluator build | A changed evaluator |
+| S23 | The `evaluator_id` equals the pinned evaluator build, or `human-review`. `human-review` needs a valid `owner_approval` by the owner key that the policy pins, over this warrant's action, `swap_id`, `tx_binding`, facts and validity window. An owner approval turns only `Ask` into `Allow`. It never overrides `Deny` or a failed section 7 check. | A changed evaluator; a forged or replayed owner approval |
 | S24 | The decoded transaction matches the warrant exactly (section 4.2) | A valid warrant on a different transaction |
 | S25 | The ledger state that feeds ledger facts has a monotonic counter and survives restart. Lost state gives `Unknown`. | A reset of the daily limit by a restart |
 | S26 | Every signature commits to the complete authorized transaction. On Bitcoin, the signer uses only `SIGHASH_DEFAULT` or `SIGHASH_ALL`. It never uses `SIGHASH_NONE`, `SIGHASH_SINGLE` or `ANYONECANPAY`. | A third party changes the inputs or outputs after the signature and redirects the signer's coins |
@@ -558,22 +661,27 @@ profile hash in the policy. A profile supplies:
 
 | Primitive | Bitcoin | EVM | Solana |
 |---|---|---|---|
-| Lock form | Taproot output (BIP 341). Claim leaf and refund leaf in tapscript (BIP 342). | HTLC contract, one swap per `swap_id` | HTLC program, one escrow PDA per `swap_id` |
+| Lock form | Taproot output (BIP 341). Claim leaf and refund leaf in tapscript (BIP 342). | HTLC contract, one lock per `lock_id` | HTLC program, one escrow PDA per `lock_id` |
 | SHA-256 | `OP_SHA256` | Precompile `0x02` | `sol_sha256` system call |
 | Length check | `OP_SIZE 32 OP_EQUALVERIFY` before `OP_SHA256` | Preimage parameter typed `bytes32` | Preimage argument typed `[u8; 32]` |
-| Claim leaf / function | `OP_SIZE 32 OP_EQUALVERIFY OP_SHA256 <H> OP_EQUALVERIFY <receiver> OP_CHECKSIG` | `claim(swap_id, s)` pays the stored receiver | `claim` pays the stored receiver token account |
+| Claim leaf / function | `<lock_id> OP_DROP OP_SIZE 32 OP_EQUALVERIFY OP_SHA256 <H> OP_EQUALVERIFY <claim_key> OP_CHECKSIG`. Every key in a leaf is a 32-byte x-only key (BIP 340). In tapscript, a key of any other non-zero size is an unknown key type (BIP 342). `OP_CHECKSIG` then succeeds for any non-empty signature, and anyone who sees `s` can claim through a miner. The template and the S7 re-derivation reject such a key. | `claim(lock_id, s)` pays the stored receiver | `claim` pays the stored receiver token account |
+| Refund leaf / function | `<T> OP_CHECKLOCKTIMEVERIFY OP_DROP <refund_key> OP_CHECKSIG`. The refund transaction sets `nLockTime` to the same kind as `T` (height or time) and to at least `T`. Its input `nSequence` is below `0xFFFFFFFF`, or CLTV fails (BIP 65). A relative lock uses `<T> OP_CHECKSEQUENCEVERIFY OP_DROP`, transaction version 2 or higher, and an input `nSequence` that encodes `T` (BIP 68). | `refund(lock_id)` after `T` pays the stored `refund_to` | `refund` after `T` pays the stored `refund_to` account |
 | Absolute timelock | `OP_CHECKLOCKTIMEVERIFY` (BIP 65): height below 500,000,000, else time against MTP (BIP 113) | `block.timestamp` | Clock sysvar `unix_timestamp` |
 | Relative timelock | `OP_CHECKSEQUENCEVERIFY` (BIP 112, BIP 68) | Not native | Not native |
-| Clock risk | MTP lags about 1 hour; block time can lead by up to 2 hours; block interval varies widely | L1: fixed 12-second slots. L2: the sequencer sets time within its rules. On some L2s, `block.number` follows L1, so use time. | `unix_timestamp` is a stake-weighted estimate and can drift; slot time varies |
-| Internal key | Unspendable point (BIP 341 NUMS), or a MuSig2 aggregate (BIP 327) for a cooperative key-path spend | — | — |
-| Swap id binding | `H` is unique per swap (S4), so `H` binds the swap | Contract storage keyed by `swap_id` | PDA seeds include `swap_id` |
+| Clock risk | MTP lags about 1 hour; block time can lead by up to 2 hours; block arrival is random (section 7.3) | L1: fixed 12-second slots. L2: the sequencer sets `block.timestamp` inside a window. At the time of writing, Arbitrum One permits about 24 hours behind and 1 hour ahead. OP Stack permits up to `max_sequencer_drift` (1,800 s) ahead of the L1 origin. On Arbitrum, `block.number` is an approximate L1 block number, so use time. A sequencer can also delay a transaction until forced inclusion through L1: about 24 hours on Arbitrum One, about 12 hours on OP Stack. The profile measures these values (section 8.8) and puts them into its drift and `D_confirm` (S11). | `unix_timestamp` is a stake-weighted estimate and can drift; slot time varies |
+| Internal key | The BIP 341 unspendable point (`NUMS`), or a MuSig2 aggregate (BIP 327) for a cooperative key-path spend. A MuSig2 or FROST signer uses each secret nonce once. It never writes a secret nonce to persistent storage or a backup, and it never restores one after a restart (BIP 327). Nonce reuse discloses the signing key. | — | — |
+| Swap binding | The claim leaf starts with `<lock_id> OP_DROP`, so the output key commits to the lock. `H` alone does not bind the swap: the initiator chooses `H`, and the responder cannot verify S4. S10 adds a consumed set of outpoints and hashlocks. | Contract storage keyed by `lock_id` | PDA seeds include `lock_id` |
+
+`lock_id` includes the funding sender (section 3.2). The two legs of one swap can
+therefore use the same contract on the same chain, and a third party cannot take
+the key first.
 
 ### 8.3 Finality and observation
 
 | Chain | Finality rule | Notes |
 |---|---|---|
 | Bitcoin | `k` confirmations; `k` grows with the value band | Probabilistic. A Merkle proof shows inclusion, not that the output is unspent. The watcher tracks spends. |
-| Ethereum L1 | `finalized` block tag | About two epochs (about 13 minutes). `safe` is weaker. |
+| Ethereum L1 | `finalized` block tag | Normally 64 to 95 slots after the block (about 13 to 19 minutes). Finality can stall when participation drops. The signer then waits, and S13 checks the remaining window again. `safe` is weaker. |
 | Optimistic L2 (OP Stack, Arbitrum) | Batch posted to L1 and the L1 block finalized | A sequencer confirmation is soft. A policy can accept it only below a value limit. |
 | Other EVM L1 | Per profile | The profile documents the consensus finality. |
 | Solana | `finalized` commitment | `confirmed` is optimistic confirmation. A policy can accept it only below a value limit. |
@@ -582,9 +690,9 @@ profile hash in the policy. A profile supplies:
 
 | Chain | How the signer proves that the lock is the pinned HTLC |
 |---|---|
-| Bitcoin | Re-derive the Taproot output from the template, `H`, both keys and `T`. Compare the derived `scriptPubKey` (bech32m, BIP 350) with the observed output. |
-| EVM | The address is in the pinned set and `EXTCODEHASH` (EIP-1052) equals the pinned code hash. Reject a proxy (EIP-1967 implementation slot set) unless the policy pins its admin and implementation. |
-| Solana | The program id is in the pinned set. The upgrade authority in `ProgramData` is none or a pinned account. The escrow account is the PDA from the expected seeds, is owned by the program and has the expected discriminator. |
+| Bitcoin | Re-derive the Taproot output from the template, `lock_id`, `H`, both leaf keys, `T`, the leaf version `0xc0` and the internal key. The internal key must be one of these: the BIP 341 point `NUMS`; `NUMS + r·G` with `r` disclosed to the verifier; or a MuSig2 aggregate (BIP 327) of both parties' keys that the verifier computes itself. Any other internal key gives the funder a key-path spend that bypasses both leaves, so the verifier rejects the lock. Compare the derived `scriptPubKey` bytes (`OP_1 <32-byte output key>`) with the observed output, and check the amount (S8). The bech32m address (BIP 350) is only the display form. |
+| EVM | The address is in the pinned set and `EXTCODEHASH` (EIP-1052) equals the pinned code hash. Reject a proxy of any pattern (EIP-1967, legacy slots such as `org.zeppelinos.proxy.implementation`, beacon, diamond) unless the policy pins its admin and implementation. |
+| Solana | The program id is in the pinned set. The program account is owned by the upgradeable loader (`BPFLoaderUpgradeab1e11111111111111111111111`) and points to its `ProgramData` account. The upgrade authority in `ProgramData` is none or a pinned account. The hash of the program bytes after the 45-byte `ProgramData` header, without trailing zero padding, equals the pinned code hash. The signer rejects a program under any other loader unless the profile defines the same checks for it. The escrow account is the PDA from the expected seeds, is owned by the program and has the expected discriminator. For a token leg, the escrow token account is owned by the pinned token program, has the leg mint, and has the escrow PDA as its owner. |
 
 ### 8.5 Asset identity and risk flags
 
@@ -597,14 +705,19 @@ then reports a set of universal risk flags:
 | `freezable_by_issuer` | — | Issuer blacklist (common in stablecoins) | Mint freeze authority set | The issuer can freeze the escrow, so the claim fails |
 | `seizable_by_issuer` | — | Admin transfer function | Token-2022 permanent delegate | The issuer can move funds out of the escrow |
 | `pausable` | — | Pausable token | Token-2022 pausable extension | Claim and refund can stop for a time |
-| `upgradeable` | — | Token behind a proxy | Mint authority or program upgrade authority set | Behaviour can change during the swap |
+| `upgradeable` | — | Token code that an admin can change: any proxy pattern (EIP-1967, legacy slots such as `org.zeppelinos.proxy.implementation`, beacon, diamond) or call forwarding such as USDT `deprecate` | A Token-2022 extension authority that can change behaviour (transfer fee config, transfer hook, pause, interest rate or UI multiplier), or an upgradeable transfer-hook program | Behaviour can change during the swap |
 | `transfer_fee` | — | Fee-on-transfer token | Token-2022 transfer fee extension | The net amount differs from the gross amount (S8) |
 | `transfer_hook` | — | ERC-777 style hooks | Token-2022 transfer hook | Foreign code runs on claim and can block it |
-| `rebasing` | — | Rebasing token | Interest-bearing or scaled display amount | The amount in the escrow changes |
+| `rebasing` | — | Rebasing token | — | The amount in the escrow changes |
+| `ui_multiplier` | — | — | Token-2022 interest-bearing or scaled UI amount | The base-unit amount does not change. The UI amount and the value of one base unit change. The signer computes notional and price from base units and the multiplier read at the fact block. |
 | `confidential_amount` | — | — | Token-2022 confidential transfer | The signer cannot verify the amount |
 | `non_transferable` | — | Soulbound token | Token-2022 non-transferable | The claim cannot succeed |
 
-`confidential_amount` and `non_transferable` always give `Deny` (section 7). The
+A flag that the reader cannot decide is unknown, never absent. On EVM, the
+profile takes the flags from a reviewed list of token code hashes. A token whose
+code is not on that list gets `Unknown` for every flag.
+
+`confidential_amount` and `non_transferable` always give `Deny` (S9). The
 policy decides each other flag through `AssetRiskWithin`. Many real stablecoins
 carry `freezable_by_issuer`. A policy that trades them must allow that flag
 knowingly.
@@ -617,15 +730,15 @@ knowingly.
 | Raise the fee | Replace-by-fee (BIP 125) or child-pays-for-parent | Replace with the same nonce and a higher fee | No replacement. Resubmit with a new recent blockhash and a higher priority fee. |
 | Pinning resistance | TRUC (version 3) transactions (BIP 431) and pay-to-anchor outputs, subject to node policy | — | — |
 | Queue hazard | — | A stuck transaction with a lower nonce blocks the claim. Use a dedicated account per role, or clear the queue before the reveal. | A recent blockhash expires after about 150 blocks |
-| Prepared refund | Sign the refund transaction at lock time with `nLockTime = T`. Raise its fee later through child-pays-for-parent. | Prefer a contract where anyone can trigger `refund` to the fixed `refund_to`. A watchtower then needs no key. | A durable nonce account permits a pre-signed refund. Otherwise use a permissionless refund instruction. |
+| Prepared refund | Sign the refund transaction at lock time. It is a TRUC (version 3) transaction (BIP 431). It has `nLockTime = T` (same kind as `T`) and an input `nSequence` below `0xFFFFFFFF` (BIP 65). It has one output to `refund_to` and one pay-to-anchor (P2A) output of 240 satoshis. A watchtower raises the fee through child-pays-for-parent. The child spends the P2A output and a confirmed coin of the watchtower, so it needs no signer key. Broadcast uses one-parent-one-child package relay. Every input of the lock transaction is segwit, so the lock txid cannot change. | Prefer a contract where anyone can trigger `refund` to the fixed `refund_to`. A watchtower then needs no key. | Prefer a permissionless refund instruction that pays the fixed `refund_to`. A watchtower then needs no key of the party. A pre-signed refund with a durable nonce is a fallback only. Each prepared transaction needs its own nonce account. Any other use of that nonce makes it invalid. A failed submission before `T` still advances the nonce and so destroys the prepared refund. Its priority fee is fixed at signing, so a fee raise (S19) needs a new signature. |
 | Private submission | Direct submission to miners, where available | Private relays | Direct submission to the leader, where available |
 
 ### 8.7 Signing interface
 
 | Chain | What the policy signer receives and signs |
 |---|---|
-| Bitcoin | A PSBT (BIP 174 or BIP 370). The signer computes the BIP 341 sighash itself. It never signs a sighash that the agent supplies. It ignores any sighash type in the PSBT and uses `SIGHASH_DEFAULT` or `SIGHASH_ALL` only (S26). |
-| EVM | A typed transaction (EIP-2718, EIP-1559) with the EIP-155 chain id. Token allowances are exact. EIP-2612 `permit` or Permit2 is acceptable with an exact amount and a short deadline. |
+| Bitcoin | A PSBT (BIP 174 or BIP 370). The signer takes each prevout amount and `scriptPubKey` from its own node or verified chain facts, never from the PSBT. Own funding coins are Taproot (P2TR) outputs only. The BIP 341 sighash then commits to the amounts and `scriptPubKey`s of all inputs. A leaf spend uses the BIP 341 sighash with the BIP 342 extension (tapleaf hash). The signer computes every sighash itself. It never signs a sighash that the agent supplies. If the PSBT has a sighash type field with a value other than `SIGHASH_DEFAULT` (0x00, Taproot only) or `SIGHASH_ALL` (0x01), the signer rejects the PSBT and alerts the owner. BIP 174 requires a signer to fail on an unacceptable type. The signer signs with one of these two types only (S26). |
+| EVM | A typed transaction (EIP-2718, EIP-1559) with the EIP-155 chain id. Every `approve` names the pinned HTLC, or the pinned E2 wrapper, as spender, for the exact gross debit (S8). An EIP-2612 `permit` is acceptable only for the exact gross debit, with the same spender rule and a deadline no later than the warrant `valid_until`. A `permit` is an EIP-712 signature, not a transaction, so the `TxBinding` also contains its digest; its domain `chainId` and `verifyingContract` equal the chain and the token. Permit2 is not allowed in version 1. |
 | Solana | A transaction message. The signer resolves address lookup tables and decodes every instruction before it signs. |
 
 ### 8.8 Adding a chain
@@ -634,7 +747,7 @@ A new chain, for example a chain that a venue already supports, enters only when
 its profile passes this checklist:
 
 1. Every obligatory item of section 8.1 has an implementation and a test.
-2. The lock template has a regression test for each check S1 to S10.
+2. The lock template has a regression test for each check S1 to S10 and S27.
 3. The clock bounds come from measured data, with a source and a date.
 4. A fault test shows a correct refund after a missed claim.
 5. A reviewer other than the author approves the profile. The policy pins its
@@ -653,9 +766,18 @@ without it. The enforcement tier states which keys refuse.
 | Tier | Mechanism | Protects against | Bitcoin | EVM | Solana | Status |
 |---|---|---|---|---|---|---|
 | E0 | The policy signer is the only holder of the funding key. The agent holds no key. | A wrong or manipulated LLM; prompt injection | Yes | Yes | Yes | Planned. **Required minimum.** |
-| E1 | Funds sit in a two-party account: owner key plus policy signer key. The policy signer co-signs only with a warrant. | Theft of one host or one key | MuSig2 (BIP 327) or FROST (RFC 9591) key, or a 2-of-2 tapscript | Safe multisig with a guard, ERC-4337 or ERC-7579 account | Squads multisig, or a program-owned vault | Planned |
-| E2 | A wrapper contract checks the warrant signature before it calls the HTLC | Theft of the funding key, when the warrant key lives in a separate HSM or host | Not possible: no general message-signature opcode | EIP-712 with `ecrecover`; P-256 where a precompile exists. No Ed25519 precompile. | Ed25519 program through instruction introspection | Planned, optional |
-| E3 | The wrapper contract checks a zkVM proof of the evaluator run | As E2, and the policy stays private | Not possible | The existing Warrant RISC Zero path | Not planned | Available now for invoices only. Not recommended for swaps. |
+| E1 | Funds sit in a two-party account: owner key plus policy signer key. The policy signer co-signs only with a warrant. | Theft of one host or one key | MuSig2 (BIP 327) key, a FROST key with a BIP 340-compatible signing protocol, or a 2-of-2 tapscript. The RFC 9591 secp256k1 ciphersuite does not produce BIP 340 signatures, so Bitcoin rejects them. | Safe multisig with a guard, ERC-4337 or ERC-7579 account. Before each lock, the profile confirms that the account has no bypass path. Safe: no enabled module unless a module guard covers it, no DELEGATECALL operation, and a pinned fallback handler. ERC-4337 and ERC-7579: only pinned validators, executors and hooks, and installing a module needs both keys. | Squads multisig with threshold 2 of 2, no spending limit and no config authority, or a program-owned vault | Planned |
+| E2 | A wrapper contract checks the warrant signature before it calls the HTLC | Theft of the funding key, only when the wrapper holds the funds (a vault contract or a program-owned account) and the warrant key lives in a separate HSM or host. Without custody in the wrapper, the funding key moves the funds directly. Claim and refund pay into the vault and need no warrant (S18). | Not possible: no general message-signature opcode | EIP-712 with `ecrecover`. No Ed25519 precompile. | Ed25519 program through instruction introspection | Planned, optional |
+| E3 | The wrapper contract checks a zkVM proof of the evaluator run | As E2, and the policy stays private | Not possible | The existing Warrant RISC Zero path | Not planned | Available now in code for the invoice, task and solver escrows and the vault. No public deployment exists. Not recommended for swaps. |
+
+Under E1, no exit needs a fresh owner signature. The claim and refund keys of
+each lock are the two-party key. The profile prepares each exit in advance with
+both keys: the refund at lock time, and the claim when the counterparty lock is
+final. A Bitcoin tapscript signature does not commit to the witness, so a claim
+can be signed before `s` is known. Fee raising then uses child-pays-for-parent.
+On EVM and Solana, a permissionless claim and refund that pay the two-party
+account also meet this rule. If a chain cannot meet it, `validate_policy` rejects
+E1 for that chain.
 
 Recommendation: start with E0. Add E1 for high-value accounts. E2 and E3 change
 the settlement contracts. A venue whose rule is "one settlement engine, no
@@ -663,6 +785,17 @@ contract change" cannot use them without a separate decision.
 
 Bitcoin legs can reach at most E1. A policy that needs E2 for every leg excludes
 Bitcoin.
+
+An E2 wrapper meets these rules:
+
+- Solana: it reads the Instructions sysvar through the checked loader and
+  confirms the sysvar address. It loads the Ed25519 instruction at a fixed index
+  and confirms its program id. That instruction holds exactly one signature. Each
+  of its offsets refers to that instruction itself (instruction index
+  `u16::MAX`). The public key and the message equal the pinned warrant key and
+  the expected prefixed digest (section 4.3).
+- EVM: it rejects a zero recovered address and a high-s signature. It records
+  consumption by warrant nonce or EIP-712 digest, never by signature bytes.
 
 ---
 
@@ -676,7 +809,7 @@ flowchart LR
   subgraph Policy signer host or TEE
     F[Fact builder and chain profiles]
     E[Verified evaluator]
-    S[Safety checks S1-S26]
+    S[Safety checks S1-S27]
     K[(Keys: funding, identity, secret s)]
     W[Watchers]
     G[Ledger]
@@ -693,6 +826,7 @@ flowchart LR
   F --> S --> E
   E -- Allow --> K
   E -- Ask --> H
+  H -- "signed approval" --> K
   K -- "signed transaction" --> N
   K -- "warrant" --> M
   W --> N
@@ -710,7 +844,7 @@ flowchart LR
 
 The verified evaluator is the smallest part of the TCB. The fact builder, the
 chain profiles, the safety checks and the transaction decoder are larger. A
-proof of the evaluator does not cover them (section 11).
+proof of the evaluator does not cover them (section 12).
 
 ---
 
@@ -722,7 +856,7 @@ proof of the evaluator does not cover them (section 11).
 | Hallucinated or wrong terms | Terms come from the signed ACCEPT message. The signer recomputes notional and price deviation. |
 | Agent tries to sign a different transaction | The signer builds or fully decodes the transaction (S24) |
 | Agent key theft | E0: the agent has no key. E1: one stolen key is not enough. |
-| Policy signer host compromise | E1 limits the loss to the other key holder's approval. E2 adds a contract check on EVM and Solana. |
+| Policy signer host compromise | E1 limits the loss to the other key holder's approval. E2 adds a contract check on EVM and Solana only when the warrant key lives outside the compromised host and the wrapper holds the funds (section 9). |
 | Long or wrong preimage | S1, S2 |
 | Late reveal | S12 |
 | Counterparty lock removed by a reorganization | S14 |
@@ -735,7 +869,7 @@ proof of the evaluator does not cover them (section 11).
 | Policy rollback | S22 |
 | Evaluator substitution | S23 |
 | Daily-limit reset through a restart | S25 |
-| The HTLC free option: the second mover waits for a price move | Short windows, `CollateralAtLeast`, and a reputation penalty at the venue. This is reduced, not removed. |
+| The HTLC free option and griefing. The responder holds an option from the final lock A until its last S13 entry time. The initiator holds one from the final lock B until the reveal deadline. A party that stops after a lock keeps the other party's funds locked until `T_A` or `T_B`. | Short `T_B` and short entry windows bound both options. `CollateralAtLeast` and a reputation penalty at the venue add a cost. This is reduced, not removed. |
 | Secret leak before the reveal | S4. The secret stays in the signer. Logs, prompts and transcripts never contain it. |
 
 ---
@@ -746,7 +880,7 @@ proof of the evaluator does not cover them (section 11).
 |---|---|---|
 | Evaluator: `evaluate3` returns `Allow` only if every completion of unknowns satisfies the rule | Proved | Verus, as for the invoice evaluator |
 | Timeout arithmetic: the clock conversion is conservative and the S11 inequality is computed correctly | Proved (target) | Verus over integer bounds; small and closed |
-| Safety checks S1 to S26 | Tested | One negative test per check; mutation tests on each check |
+| Safety checks S1 to S27 | Tested | One negative test per check; mutation tests on each check |
 | Chain profiles and transaction decoders | Tested | Regression tests on regtest, local EVM and local Solana validators; fault injection (section 13.3) |
 | Cryptographic libraries, node software, HSM or KMS | Assumed | Pinned versions |
 | The chains' consensus and the clock bounds in the profile | Assumed | Measured data with a source and a date |
@@ -764,7 +898,8 @@ that the method works (whitepaper section 7).
 | Crate | Contents | Depends on |
 |---|---|---|
 | `verified` (`warrant-verified-policy`) | `Rule`, `Facts`, `Facts3`, `evaluate`, `Decision`, Verus proofs | `vstd`, optional `serde` |
-| `core` (`warrant-policy`) | Policy validation, evidence checks, invoice parser, solver checks, the 12/15-word journals | `verified`, `sha2`, `bincode`, `k256` |
+| `core` (`warrant-policy`) | Policy validation, evidence checks, invoice parser, solver checks, the 12-, 13- and 15-word journals | `verified`, `sha2`, `bincode`, `k256` |
+| `solver-cli` (`warrant-solver`) | Native checker and artifact tool for solver bounties | `core`, `serde`, `serde_json` |
 | `methods` | RISC Zero guests | `core`, `risc0-zkvm` |
 | `host` | Prover host, signer service, tools | `core`, `methods`, `risc0-zkvm` |
 | `contracts` | Escrows and vault that pin a guest image id | — |
@@ -772,10 +907,12 @@ that the method works (whitepaper section 7).
 The evaluator is already separate from the zkVM code. `core` and `verified` do
 not depend on RISC Zero. A policy signer can use them without the zkVM.
 
-There is one coupling to avoid. The invoice guest compiles `core` and `verified`.
-`InvoiceEscrow` and the vault store the guest `imageId` as an immutable value. A
-change to `Rule` in `verified` therefore changes the image id. That change
-needs a new escrow deployment and new receipts for the invoice product.
+There is one coupling to avoid. All three guests (`guest`, `invoice-guest`,
+`solver-guest`) compile `core` and `verified`. `InvoiceEscrow`, `TaskEscrow`,
+`SolverBountyEscrow` (through `TaskEscrow`) and `PolicyExecutionVault` each store
+a guest `imageId` as an immutable value. A change to `Rule` in `verified`
+therefore changes every image id. That change needs new deployments of all four
+contracts and new receipts for the invoice, task and solver products.
 
 ### 13.2 Layout for swaps (planned)
 
@@ -784,8 +921,8 @@ Do not add swap atoms to the existing `Rule`. Add three crates:
 | Crate | Contents | Depends on | Does not depend on |
 |---|---|---|---|
 | `swap-verified` | `SwapRule`, `SwapFacts3`, `evaluate3`, timeout arithmetic, Verus proofs | `vstd`, optional `serde` | `k256`, RISC Zero, Mnemonik |
-| `swap-core` | Chain profile interface, fact builder, safety checks S1 to S26, warrant payload (JCS), transaction decoders | `swap-verified`, chain parsing libraries | RISC Zero, Mnemonik, network clients |
-| `swap-signer` | The policy signer binary: keys, watchers, ledger, RPC and node clients, Ask queue, anchoring | `swap-core`, `mnemonic-core` (COSE, sealed A2A, anchoring), KMS adapters | RISC Zero |
+| `swap-core` | Chain profile interface, fact builder, pure check functions for S1 to S3, S5 to S15, S18, S20 to S24, S26 and S27 over facts and state that the signer supplies, warrant payload (JCS), transaction decoders | `swap-verified`, chain parsing libraries | RISC Zero, Mnemonik, network clients |
+| `swap-signer` | The policy signer binary: keys, watchers, ledger, RPC and node clients, Ask queue, anchoring; operational duties S4, S16, S17, S19 and S25; durable state for S10, S21 and S22 | `swap-core`, `mnemonic-core` (COSE, sealed A2A, anchoring), KMS adapters | RISC Zero |
 
 Rules for the layout:
 
@@ -805,7 +942,7 @@ Rules for the layout:
 |---|---|---|
 | W0 | Review this specification. Decide questions 1 to 3 of section 14. | Owner sign-off; schemas frozen |
 | W1 | `swap-verified`: atoms, evaluator, timeout arithmetic, proofs | Verus passes with `--no-cheating`; every deliberate mutation rejected, including "Ask treated as Allow" |
-| W2 | `swap-core`: Bitcoin, EVM and Solana profiles; checks S1 to S26 | One failing test per check without the check; fixtures for each risk flag |
+| W2 | `swap-core`: Bitcoin, EVM and Solana profiles; checks S1 to S27 | One failing test per check without the check; fixtures for each risk flag |
 | W3 | `swap-signer` at tier E0: keys, watchers, ledger, warrants anchored through Mnemonik | Two local agents complete a swap on regtest, a local EVM node and a local Solana validator |
 | W4 | Venue adapter, for example the Flo.tc `UserSDK` | Testnet swap between two agents; secret-hygiene audit of logs, prompts and transcripts |
 | W5 | Tier E1 co-signing; external security review | Review closed; capped mainnet pilot |
@@ -821,6 +958,7 @@ Fault-injection tests for W2 to W4:
 7. a proposed transaction with one extra output or one extra instruction;
 8. a replayed warrant; a rolled-back policy version;
 9. a signer restart during an open swap, with ledger state and watchers restored;
+   a restart during an open MuSig2 session does not reuse a nonce;
 10. an initiator outage past the reveal deadline: the initiator does not reveal and
     refunds leg A after `T_A`; the responder refunds leg B after `T_B`.
 
@@ -839,7 +977,8 @@ Fault-injection tests for W2 to W4:
    missing: `Ask` or `Deny`.
 6. **Decision records.** Anchor `Deny` and `Ask` records sealed, so that only the
    party and its auditor can read them, or keep them local.
-7. **Tier E1 on Bitcoin.** MuSig2 or FROST, and the maturity of the tools.
+7. **Tier E1 on Bitcoin.** MuSig2 or a BIP 340-compatible FROST variant, and the
+   maturity of the tools.
 8. **Version 2.** Adaptor signatures (PTLC) remove the shared hash between the
    legs and improve privacy. A swap across curves (Ed25519 and secp256k1) then
    needs a cross-curve discrete-logarithm equality proof. Lightning legs are a
@@ -857,8 +996,7 @@ BIP 68 and BIP 112 (relative timelocks), BIP 113 (median time past), BIP 125
 Ethereum (https://eips.ethereum.org): EIP-155 (chain id), EIP-712 (typed data
 signing), EIP-1052 (`EXTCODEHASH`), EIP-1186 (`eth_getProof`), EIP-1559 (fee
 market), EIP-1967 (proxy slots), EIP-2612 (`permit`), EIP-2718 (typed
-transactions), ERC-4337 (account abstraction), ERC-7579 (modular accounts),
-RIP-7212 and EIP-7951 (P-256 signature verification).
+transactions), ERC-4337 (account abstraction), ERC-7579 (modular accounts).
 
 Solana (https://solana.com/docs): Clock sysvar, commitment levels, durable
 nonces, the Ed25519 program, the upgradeable loader, Token-2022 extensions.
