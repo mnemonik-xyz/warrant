@@ -1,6 +1,6 @@
 # Warrant for swaps: implementation specification for W1 and W2
 
-Version 0.1 · 2026-10-05 · Status: **in progress**. Companion to
+Version 0.2 · 2026-10-05 · Status: **W1 and W2 implemented** (see section 5). Companion to
 [the swap specification](spec.md). Task list: [tasks.md](tasks.md).
 
 This document fixes the decisions of step W0 and specifies the two crates of
@@ -31,7 +31,12 @@ Other choices that this document makes, all inside the spec's freedom:
   transaction binding use BLAKE3. CAIP identifiers use SHA-256 (as above).
 - **Relative timelocks.** `swap-core` converts a relative timelock to an
   absolute height or time from the observed confirmation of the lock. The
-  verified arithmetic handles absolute timelocks only.
+  verified arithmetic handles absolute timelocks only. The responder's leg
+  (leg B) needs an absolute timelock: a relative one starts at an unknown
+  future confirmation, and S11 could not bound it.
+- **Own Bitcoin coins** are Taproot key-path outputs, so the signer computes
+  every BIP 341 sighash itself. PSBT version 0 only.
+- **Validity windows** of warrants use the signer's real time in W2.
 - **Reference HTLC interfaces.** The EVM and Solana decoders check calls
   against a reference interface (section 4.6). A venue adapter (W4) maps a
   different contract onto the same intent.
@@ -251,7 +256,6 @@ Risk flags are names from spec 8.5.
 - a currency that differs from `ref_ccy`;
 - a chain in an atom that has no entry in `chains`, or whose profile misses an
   obligatory item (spec 8.8);
-- a period atom without a matching ledger period;
 - the flags `confidential_amount` and `non_transferable` in `asset_risk_within`;
 - any field that names an exit action (spec 3.3).
 
@@ -389,3 +393,32 @@ the records of one swap and one party.
 - Golden tests for the JCS payload and the hashes.
 - Cross-checks against `rust-bitcoin` for the Taproot output and PSBT parsing.
 - `cargo build --target wasm32-unknown-unknown -p warrant-swap-core`.
+
+## 5. Results (2026-10-05)
+
+Code: `policy-execution` branch `ccr-7c731f40-t51t9k`, crates `swap-verified`
+and `swap-core`.
+
+| Item | Result |
+|---|---|
+| Verus `0.2026.09.20.aef82ed`, `--no-cheating` | 49 verified, 0 errors |
+| Executable mutations of the evaluator and the arithmetic | 29 of 29 rejected |
+| `swap-verified` native tests | 12 passed |
+| `swap-core` unit tests | 55 passed |
+| `swap-core` pipeline tests (both roles, every action, fault tests 1, 2, 3, 5, 6, 7, 8, 10, every risk flag) | 22 passed |
+| Disabled obligatory checks caught by a test (`check_mutations.py`) | 18 of 18; S1 is also enforced by the type |
+| Cross-checks | Taproot output, txid and BIP 341 sighashes against `rust-bitcoin`; PDAs against the Solana SDK |
+| `wasm32-unknown-unknown` build of `swap-core` and `swap-verified` (with `vstd`) | Succeeds |
+| Existing invoice crates (`warrant-policy`, `warrant-verified-policy`) | Unchanged; tests pass with `--locked` |
+
+Found during implementation and fixed:
+
+- `accept` must check S7 itself: a leg that names an unpinned contract is denied
+  even when the policy has no `contract_pinned` atom.
+- Fee amounts in profiles exceed 2^53 (wei), so they are decimal strings in JCS,
+  like leg amounts.
+- The ledger excludes the swap's own accepted notional when the same swap
+  reaches `lock` or `reveal`; otherwise the period limit counts it twice.
+
+Open for W3: the exact Bitcoin observation adapter, signing, persistence of the
+ledger, watchers, and fault-injection tests 4 and 9.
