@@ -395,11 +395,20 @@ provenance is `Unknown`.
 
 | Class | Source | Examples |
 |---|---|---|
-| Signed facts | An authority that the owner approved signs them | Counterparty identity credential, oracle price report, sanctions list snapshot, signed ACCEPT terms |
+| Signed facts | An authority that the owner approved signs them | Counterparty identity record, oracle price report, sanctions list snapshot, signed ACCEPT terms |
 | Chain facts | The policy signer observes them on a chain | Lock exists, lock parameters, confirmation depth, chain time, token metadata, contract code hash |
 | Derived facts | Deterministic computation from other facts | Notional in the reference currency, timeout gap, reveal deadline, price deviation |
 | Ledger facts | The policy signer's own state | Notional spent this period, open swaps, consumed nonces |
 | Checked claims | The agent claims, a deterministic checker admits | Rarely needed for swaps. A swap has structured terms, not free text |
+
+**Counterparty identity.** A counterparty is named by its Mnemonik agent `id`,
+never by a key alone. The signer resolves the `id` to the counterparty's
+identity record (planned in the Mnemonik `work/agent-identity-records/` spec): a
+self-signed, key-rotating record chain anchored on Arweave. The record gives the
+current signing key, the encryption key for sealed negotiation and the chain
+accounts. A record that resolves to `conflicted`, `revoked`, `expired` or
+`unknown` gives no identity fact, so the identity atoms are `Unknown`. The venue
+or a directory can list `id` values, but it cannot substitute keys.
 
 ### 5.2 The selection invariant for swaps
 
@@ -467,7 +476,7 @@ Generic atoms. Other domains can reuse them.
 |---|---|
 | `ChainIn(set)` | The leg chain (CAIP-2) is in the set |
 | `AssetIn(set)` | The leg asset (CAIP-19) is in the set |
-| `CounterpartyIn(set)` | The counterparty identity is in the set, by a signed credential |
+| `CounterpartyIn(set)` | The counterparty's Mnemonik agent `id` is in the set, and its identity record resolves to `active` (section 5.1) |
 | `CounterpartyNotListed(list_hash)` | A signed credential establishes the counterparty identity, and a signed snapshot with this hash is present and valid. Neither the identity nor any counterparty account in the legs (sender, receiver, `refund_to`) is in the snapshot. A missing identity or snapshot makes the atom `Unknown`, never true. |
 | `NotionalAtMost(ref_ccy, amount)` | The derived notional of the trade is at most the amount |
 | `PeriodNotionalAtMost(period, ref_ccy, amount)` | Ledger spend in the period plus this trade, in the reference currency, is at most the amount |
