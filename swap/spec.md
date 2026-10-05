@@ -243,7 +243,9 @@ fee-only:
 - EVM: `max_fee_per_gas` and `max_priority_fee_per_gas`, with the same nonce;
 - Solana: the compute unit price and the recent blockhash;
 - Bitcoin: a lower own change output under replace-by-fee, or a child-pays-for-parent
-  child that spends only an own output or the anchor output.
+  child that spends only an own output or the anchor output. A `lock` is never
+  replaced: a new lock txid would invalidate its prepared refund. A lock fee raise
+  uses only a child that spends the own change output.
 
 For an entry action, a fee-only variant inside the ceiling stays covered by the
 same warrant. The signer records the hash of each signed variant. S21 counts all
@@ -269,7 +271,8 @@ The decoded transaction must do the authorized action and nothing more:
   - `claim` and `refund`: one input is the lock outpoint of this swap, spent
     through the expected leaf. Any other inputs are own confirmed coins for the
     fee. The outputs are one output to the fixed receiver or `refund_to`, own
-    change and, for a prepared refund, one pay-to-anchor output (section 8.6).
+    change and, for a prepared claim or refund, one pay-to-anchor output
+    (section 8.6).
   - A fee-raising child spends only an own output or the anchor output, plus own
     confirmed coins. It pays only to own change.
   - No other input or output exists. Every signature commits to the complete
@@ -375,7 +378,7 @@ method. The policy names the minimum method for each value band.
 | Method | Strength | Notes |
 |---|---|---|
 | Own full node | Strongest | Bitcoin: own `bitcoind`. EVM: own execution and consensus client. Solana: own RPC node. |
-| Light client proof | Strong | Bitcoin: block headers plus a Merkle proof of the transaction. The verifier takes the most-work header chain from several peers. It hashes the full transaction bytes to the txid. It rejects a 64-byte transaction, and it checks the proof depth against a Merkle proof of the coinbase transaction in the same block (CVE-2017-12842). EVM: `eth_getProof` (EIP-1186) against a finalized header from a light client. |
+| Light client proof | Strong | Bitcoin: block headers plus a Merkle proof of the transaction. The verifier takes the most-work header chain from several peers. It computes the txid from the transaction serialization without witness data. It rejects a transaction whose serialization without witness data is 64 bytes, and it checks the proof depth against a Merkle proof of the coinbase transaction in the same block (CVE-2017-12842). EVM: `eth_getProof` (EIP-1186) against a finalized header from a light client. |
 | Quorum of independent RPC providers | Medium | N of M providers must agree on the block hash and the value. |
 | One third-party RPC | Weak | Allowed only below a policy value limit. |
 
@@ -644,7 +647,7 @@ profile hash in the policy. A profile supplies:
 | CAIP-2 chain id and network kind (mainnet or test) | Yes | Binding (S20); mainnet guard |
 | Lock template with SHA-256 and a 32-byte preimage check | Yes | S1, S2 |
 | Claim to a fixed receiver, refund to a fixed account | Yes | S5, S6 |
-| Timelock kinds with clock bounds (fastest and slowest block interval, timestamp drift) | Yes | S11, S12 |
+| Timelock kinds with clock bounds (real-time bounds for `n` blocks at a stated failure probability, timestamp drift, sequencer window) | Yes | S11, S12 |
 | Finality rule and observation methods | Yes | S14, section 5.3 |
 | Contract identity derivation | Yes | S7 |
 | Asset identity and risk flag reader | Yes | S8, S9, section 8.5 |
@@ -652,7 +655,7 @@ profile hash in the policy. A profile supplies:
 | Fee model, worst-case fee and fee-raising method | Yes | S15, S19 |
 | Prepared refund method or permissionless refund | Yes, one of the two | S17 |
 | Swap id binding in the lock | Useful | S10 |
-| Cooperative key-path spend | Useful | Privacy and lower fees |
+| Cooperative key-path spend | Planned (not in version 1) | Privacy and lower fees. Version 1 locks have no usable key path. |
 | Private transaction submission | Useful | Less griefing around the reveal |
 | On-chain signature check for warrants | Useful | Enforcement tier E2 (section 9) |
 | Co-signature account (multisig, smart account) | Useful | Enforcement tier E1 (section 9) |
@@ -665,11 +668,11 @@ profile hash in the policy. A profile supplies:
 | SHA-256 | `OP_SHA256` | Precompile `0x02` | `sol_sha256` system call |
 | Length check | `OP_SIZE 32 OP_EQUALVERIFY` before `OP_SHA256` | Preimage parameter typed `bytes32` | Preimage argument typed `[u8; 32]` |
 | Claim leaf / function | `<lock_id> OP_DROP OP_SIZE 32 OP_EQUALVERIFY OP_SHA256 <H> OP_EQUALVERIFY <claim_key> OP_CHECKSIG`. Every key in a leaf is a 32-byte x-only key (BIP 340). In tapscript, a key of any other non-zero size is an unknown key type (BIP 342). `OP_CHECKSIG` then succeeds for any non-empty signature, and anyone who sees `s` can claim through a miner. The template and the S7 re-derivation reject such a key. | `claim(lock_id, s)` pays the stored receiver | `claim` pays the stored receiver token account |
-| Refund leaf / function | `<T> OP_CHECKLOCKTIMEVERIFY OP_DROP <refund_key> OP_CHECKSIG`. The refund transaction sets `nLockTime` to the same kind as `T` (height or time) and to at least `T`. Its input `nSequence` is below `0xFFFFFFFF`, or CLTV fails (BIP 65). A relative lock uses `<T> OP_CHECKSEQUENCEVERIFY OP_DROP`, transaction version 2 or higher, and an input `nSequence` that encodes `T` (BIP 68). | `refund(lock_id)` after `T` pays the stored `refund_to` | `refund` after `T` pays the stored `refund_to` account |
+| Refund leaf / function | `<T> OP_CHECKLOCKTIMEVERIFY OP_DROP <refund_key> OP_CHECKSIG`. The refund transaction sets `nLockTime` to the same kind as `T` (height or time) and to at least `T`. Its input `nSequence` is `0xFFFFFFFD`: below `0xFFFFFFFF`, so CLTV can pass (BIP 65), and with the disable flag (bit 31) set, so BIP 68 adds no relative lock. A relative lock uses `<T> OP_CHECKSEQUENCEVERIFY OP_DROP`, transaction version 2 or higher, and an input `nSequence` that encodes at least `T`, with bit 31 clear and the same type flag (bit 22, blocks or time) as `T` (BIP 68, BIP 112). | `refund(lock_id)` after `T` pays the stored `refund_to` | `refund` after `T` pays the stored `refund_to` account |
 | Absolute timelock | `OP_CHECKLOCKTIMEVERIFY` (BIP 65): height below 500,000,000, else time against MTP (BIP 113) | `block.timestamp` | Clock sysvar `unix_timestamp` |
 | Relative timelock | `OP_CHECKSEQUENCEVERIFY` (BIP 112, BIP 68) | Not native | Not native |
 | Clock risk | MTP lags about 1 hour; block time can lead by up to 2 hours; block arrival is random (section 7.3) | L1: fixed 12-second slots. L2: the sequencer sets `block.timestamp` inside a window. At the time of writing, Arbitrum One permits about 24 hours behind and 1 hour ahead. OP Stack permits up to `max_sequencer_drift` (1,800 s) ahead of the L1 origin. On Arbitrum, `block.number` is an approximate L1 block number, so use time. A sequencer can also delay a transaction until forced inclusion through L1: about 24 hours on Arbitrum One, about 12 hours on OP Stack. The profile measures these values (section 8.8) and puts them into its drift and `D_confirm` (S11). | `unix_timestamp` is a stake-weighted estimate and can drift; slot time varies |
-| Internal key | The BIP 341 unspendable point (`NUMS`), or a MuSig2 aggregate (BIP 327) for a cooperative key-path spend. A MuSig2 or FROST signer uses each secret nonce once. It never writes a secret nonce to persistent storage or a backup, and it never restores one after a restart (BIP 327). Nonce reuse discloses the signing key. | — | — |
+| Internal key | The BIP 341 unspendable point (`NUMS`). Version 1 has no key-path spend. | — | — |
 | Swap binding | The claim leaf starts with `<lock_id> OP_DROP`, so the output key commits to the lock. `H` alone does not bind the swap: the initiator chooses `H`, and the responder cannot verify S4. S10 adds a consumed set of outpoints and hashlocks. | Contract storage keyed by `lock_id` | PDA seeds include `lock_id` |
 
 `lock_id` includes the funding sender (section 3.2). The two legs of one swap can
@@ -690,7 +693,7 @@ the key first.
 
 | Chain | How the signer proves that the lock is the pinned HTLC |
 |---|---|
-| Bitcoin | Re-derive the Taproot output from the template, `lock_id`, `H`, both leaf keys, `T`, the leaf version `0xc0` and the internal key. The internal key must be one of these: the BIP 341 point `NUMS`; `NUMS + r·G` with `r` disclosed to the verifier; or a MuSig2 aggregate (BIP 327) of both parties' keys that the verifier computes itself. Any other internal key gives the funder a key-path spend that bypasses both leaves, so the verifier rejects the lock. Compare the derived `scriptPubKey` bytes (`OP_1 <32-byte output key>`) with the observed output, and check the amount (S8). The bech32m address (BIP 350) is only the display form. |
+| Bitcoin | Re-derive the Taproot output from the template, `lock_id`, `H`, both leaf keys, `T`, the leaf version `0xc0` and the internal key. The internal key must be the BIP 341 point `NUMS`, or `NUMS + r·G` with `r` disclosed to the verifier. Any other internal key gives the funder a key-path spend that bypasses both leaves, so the verifier rejects the lock. Compare the derived `scriptPubKey` bytes (`OP_1 <32-byte output key>`) with the observed output, and check the amount (S8). The bech32m address (BIP 350) is only the display form. |
 | EVM | The address is in the pinned set and `EXTCODEHASH` (EIP-1052) equals the pinned code hash. Reject a proxy of any pattern (EIP-1967, legacy slots such as `org.zeppelinos.proxy.implementation`, beacon, diamond) unless the policy pins its admin and implementation. |
 | Solana | The program id is in the pinned set. The program account is owned by the upgradeable loader (`BPFLoaderUpgradeab1e11111111111111111111111`) and points to its `ProgramData` account. The upgrade authority in `ProgramData` is none or a pinned account. The hash of the program bytes after the 45-byte `ProgramData` header, without trailing zero padding, equals the pinned code hash. The signer rejects a program under any other loader unless the profile defines the same checks for it. The escrow account is the PDA from the expected seeds, is owned by the program and has the expected discriminator. For a token leg, the escrow token account is owned by the pinned token program, has the leg mint, and has the escrow PDA as its owner. |
 
@@ -730,7 +733,7 @@ knowingly.
 | Raise the fee | Replace-by-fee (BIP 125) or child-pays-for-parent | Replace with the same nonce and a higher fee | No replacement. Resubmit with a new recent blockhash and a higher priority fee. |
 | Pinning resistance | TRUC (version 3) transactions (BIP 431) and pay-to-anchor outputs, subject to node policy | — | — |
 | Queue hazard | — | A stuck transaction with a lower nonce blocks the claim. Use a dedicated account per role, or clear the queue before the reveal. | A recent blockhash expires after about 150 blocks |
-| Prepared refund | Sign the refund transaction at lock time. It is a TRUC (version 3) transaction (BIP 431). It has `nLockTime = T` (same kind as `T`) and an input `nSequence` below `0xFFFFFFFF` (BIP 65). It has one output to `refund_to` and one pay-to-anchor (P2A) output of 240 satoshis. A watchtower raises the fee through child-pays-for-parent. The child spends the P2A output and a confirmed coin of the watchtower, so it needs no signer key. Broadcast uses one-parent-one-child package relay. Every input of the lock transaction is segwit, so the lock txid cannot change. | Prefer a contract where anyone can trigger `refund` to the fixed `refund_to`. A watchtower then needs no key. | Prefer a permissionless refund instruction that pays the fixed `refund_to`. A watchtower then needs no key of the party. A pre-signed refund with a durable nonce is a fallback only. Each prepared transaction needs its own nonce account. Any other use of that nonce makes it invalid. A failed submission before `T` still advances the nonce and so destroys the prepared refund. Its priority fee is fixed at signing, so a fee raise (S19) needs a new signature. |
+| Prepared refund | Sign the refund transaction at lock time. It is a TRUC (version 3) transaction (BIP 431). It has `nLockTime = T` (same kind as `T`) and the input `nSequence` of the refund leaf row in section 8.2. It has one output to `refund_to` and one pay-to-anchor (P2A) output of 240 satoshis. A watchtower raises the fee through child-pays-for-parent. The child spends the P2A output and a confirmed coin of the watchtower, so it needs no signer key. The child is also a TRUC transaction and has at most 1,000 virtual bytes (BIP 431). Broadcast uses one-parent-one-child package relay. Under tier E1, a prepared claim has the same form (section 9). Every input of the lock transaction is segwit, so the lock txid cannot change. | Prefer a contract where anyone can trigger `refund` to the fixed `refund_to`. A watchtower then needs no key. | Prefer a permissionless refund instruction that pays the fixed `refund_to`. A watchtower then needs no key of the party. A pre-signed refund with a durable nonce is a fallback only. Each prepared transaction needs its own nonce account. Any other use of that nonce makes it invalid. A failed submission before `T` still advances the nonce and so destroys the prepared refund. Its priority fee is fixed at signing, so a fee raise (S19) needs a new signature. |
 | Private submission | Direct submission to miners, where available | Private relays | Direct submission to the leader, where available |
 
 ### 8.7 Signing interface
@@ -766,15 +769,20 @@ without it. The enforcement tier states which keys refuse.
 | Tier | Mechanism | Protects against | Bitcoin | EVM | Solana | Status |
 |---|---|---|---|---|---|---|
 | E0 | The policy signer is the only holder of the funding key. The agent holds no key. | A wrong or manipulated LLM; prompt injection | Yes | Yes | Yes | Planned. **Required minimum.** |
-| E1 | Funds sit in a two-party account: owner key plus policy signer key. The policy signer co-signs only with a warrant. | Theft of one host or one key | MuSig2 (BIP 327) key, a FROST key with a BIP 340-compatible signing protocol, or a 2-of-2 tapscript. The RFC 9591 secp256k1 ciphersuite does not produce BIP 340 signatures, so Bitcoin rejects them. | Safe multisig with a guard, ERC-4337 or ERC-7579 account. Before each lock, the profile confirms that the account has no bypass path. Safe: no enabled module unless a module guard covers it, no DELEGATECALL operation, and a pinned fallback handler. ERC-4337 and ERC-7579: only pinned validators, executors and hooks, and installing a module needs both keys. | Squads multisig with threshold 2 of 2, no spending limit and no config authority, or a program-owned vault | Planned |
+| E1 | Funds sit in a two-party account: owner key plus policy signer key. The policy signer co-signs only with a warrant. | Theft of one host or one key | A MuSig2 (BIP 327) aggregate key, or a FROST key with a BIP 340-compatible signing protocol, as the single x-only `claim_key` and `refund_key`. The RFC 9591 secp256k1 ciphersuite does not produce BIP 340 signatures, so Bitcoin rejects them. A 2-of-2 tapscript does not fit the single-key leaf template of version 1. | Safe multisig with a guard, ERC-4337 or ERC-7579 account. Before each lock, the profile confirms that the account has no bypass path. Safe: no enabled module unless a module guard covers it, no DELEGATECALL operation, and a pinned fallback handler. ERC-4337 and ERC-7579: only pinned validators, executors and hooks, and installing a module needs both keys. | Squads multisig with threshold 2 of 2, no spending limit and no config authority, or a program-owned vault | Planned |
 | E2 | A wrapper contract checks the warrant signature before it calls the HTLC | Theft of the funding key, only when the wrapper holds the funds (a vault contract or a program-owned account) and the warrant key lives in a separate HSM or host. Without custody in the wrapper, the funding key moves the funds directly. Claim and refund pay into the vault and need no warrant (S18). | Not possible: no general message-signature opcode | EIP-712 with `ecrecover`. No Ed25519 precompile. | Ed25519 program through instruction introspection | Planned, optional |
 | E3 | The wrapper contract checks a zkVM proof of the evaluator run | As E2, and the policy stays private | Not possible | The existing Warrant RISC Zero path | Not planned | Available now in code for the invoice, task and solver escrows and the vault. No public deployment exists. Not recommended for swaps. |
 
 Under E1, no exit needs a fresh owner signature. The claim and refund keys of
 each lock are the two-party key. The profile prepares each exit in advance with
 both keys: the refund at lock time, and the claim when the counterparty lock is
-final. A Bitcoin tapscript signature does not commit to the witness, so a claim
-can be signed before `s` is known. Fee raising then uses child-pays-for-parent.
+final. A BIP 341/342 signature commits to the leaf script and to the annex, but
+not to the other witness stack elements such as `s`. A claim can therefore be
+signed before `s` is known. Each prepared exit is a TRUC transaction with a
+pay-to-anchor output (section 8.6), so a watchtower raises its fee with no key of
+the party. A MuSig2 or FROST signer uses each secret nonce once. It never writes
+a secret nonce to persistent storage or a backup, and it never restores one after
+a restart (BIP 327). Nonce reuse discloses the signing key.
 On EVM and Solana, a permissionless claim and refund that pay the two-party
 account also meet this rule. If a chain cannot meet it, `validate_policy` rejects
 E1 for that chain.
