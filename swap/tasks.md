@@ -13,6 +13,9 @@ Legend: `[x]` done, `[ ]` open, `[-]` deferred to a later step.
       nonce-advance and Ed25519 instructions.
 - [x] T0.2 Decide open questions 1 to 3 (implementation.md section 1).
 - [x] T0.3 Write the implementation specification for W1 and W2.
+- [x] T0.5 Fix the review findings on PR #7: the CLTV first valid block (code
+      and test), one clock for warrant validity, the `approve` and `lock` pair
+      under one warrant, the stale status lines.
 - [ ] T0.4 Owner sign-off; freeze the schemas.
 
 ## W1 — `swap-verified`
@@ -57,7 +60,7 @@ Result: 49 verified, 0 errors; 29 of 29 mutations rejected; 12 tests passed.
 
 Acceptance: `cargo test -p warrant-swap-core` passes; each check has a test
 that fails without the check; `swap-core` builds for `wasm32-unknown-unknown`.
-Result: 77 tests passed; 18 of 18 disabled checks caught; wasm32 build succeeds.
+Result: 78 tests passed; 18 of 18 disabled checks caught; wasm32 build succeeds.
 
 ## Later steps
 

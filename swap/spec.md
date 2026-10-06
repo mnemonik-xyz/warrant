@@ -1,6 +1,8 @@
 # Warrant for swaps: policy-attested cross-chain settlement
 
-Version 0.1 · 2026-10-05 · Draft. Status: **planned**. No swap code exists yet.
+Version 0.2 · 2026-10-06 · Draft. Status: steps W1 and W2 (`swap-verified`,
+`swap-core`) are implemented and tested; the signer (W3) and later steps are
+planned. See [implementation.md](implementation.md) and [tasks.md](tasks.md).
 
 This document specifies how Warrant authorizes the actions of an agent in an
 atomic cross-chain swap. The design is universal. It does not depend on one
@@ -174,8 +176,10 @@ sequenceDiagram
 
 ### 4.1 Contents
 
-A warrant authorizes exactly one action for one swap. Its payload is a JSON
-object in JCS canonical form:
+A warrant authorizes exactly one action for one swap. It binds the
+transactions of that action: one transaction, except an ERC-20 lock that needs
+an allowance, which binds the ordered pair `approve`, `lock` (section 4.2). Its
+payload is a JSON object in JCS canonical form:
 
 ```text
 SwapWarrant {
@@ -192,12 +196,17 @@ SwapWarrant {
   evaluator_id:    32 bytes               hash of the evaluator build, or "human-review"
   decision:        "allow"                only Allow produces a signed warrant
   reasons:         [string]               fixed reason codes, never model text
-  valid_after:     chain time of the leg chain
-  valid_until:     chain time of the leg chain
+  valid_after:     Unix seconds, the policy signer's real time
+  valid_until:     Unix seconds, the policy signer's real time
   nonce:           16 random bytes
   prev_warrant:    hash of the previous warrant for this swap and party, or null
 }
 ```
+
+The validity window uses one clock for every action, including `accept`, which
+has no leg and spans two chains: the policy signer's real time. A verifier
+compares it with its own real time and a stated skew allowance. Chain time
+still governs the locks themselves, through the timelocks and S11 to S14.
 
 `Deny` and `Ask` results are records, not warrants. The policy signer stores them
 and anchors them. It signs them with a different `protocol` value
@@ -229,7 +238,14 @@ The decoded transaction must do the authorized action and nothing more:
   `SIGHASH_SINGLE` or `ANYONECANPAY`. With those types another party could
   change the transaction after the signature.
 - EVM: one call to the pinned HTLC contract. A token lock can need one earlier
-  `approve` transaction. That approval is for the exact gross debit of the
+  `approve` transaction. The `lock` warrant then binds both transactions in
+  order, `approve` and `lock`; `approve` is not a separate action. The signer
+  signs both under the one warrant and broadcasts the lock only after the
+  approval confirms. An approval left without its lock grants only the exact
+  amount to the pinned HTLC, which moves funds only on a lock call by the
+  owner; the signer revokes it when the swap ends without a lock. Where the
+  token supports EIP-2612 `permit` or Permit2, the approval and the lock can be
+  one transaction instead. That approval is for the exact gross debit of the
   lock. For a normal token, the gross debit is the leg amount. For a token with
   `transfer_fee`, the signer computes the gross debit from the fee parameters
   that it reads on the chain, so that the net amount in the lock equals the
@@ -748,8 +764,11 @@ proof of the evaluator does not cover them (section 11).
 | The chains' consensus and the clock bounds in the profile | Assumed | Measured data with a source and a date |
 | Translation of the owner's intent into a rule tree | Assumed | The owner reviews and approves the exact rule tree |
 
-Today none of the swap parts exists. The invoice evaluator proof exists and shows
-that the method works (whitepaper section 7).
+Status on 2026-10-06: the evaluator, the timeout arithmetic and their proofs
+exist (`swap-verified`), and so do the safety checks, the chain profiles and the
+transaction decoders, with their tests (`swap-core`). The proof covers the
+evaluator and the arithmetic only. See [implementation.md](implementation.md)
+section 5 for the results.
 
 ---
 
@@ -773,7 +792,7 @@ There is one coupling to avoid. The invoice guest compiles `core` and `verified`
 change to `Rule` in `verified` therefore changes the image id. That change
 needs a new escrow deployment and new receipts for the invoice product.
 
-### 13.2 Layout for swaps (planned)
+### 13.2 Layout for swaps (`swap-verified` and `swap-core` implemented; `swap-signer` planned)
 
 Do not add swap atoms to the existing `Rule`. Add three crates:
 
