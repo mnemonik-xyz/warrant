@@ -1,6 +1,6 @@
 # Warrant for USDC: the case, with diagrams
 
-Status: 2026-09-24. What is built in `policy-execution/` and how a payment flows.
+Status: customer-isolation update, 2026-09-30; historical demonstrations dated 2026-09-24. What is built in `policy-execution/` and how a payment flows.
 Numbers are from local runs on 2026-09-23 and 2026-09-24 (4 vCPUs, no GPU) unless stated.
 
 Abbreviations: PO — purchase order; USDC — USD Coin; zkVM — zero-knowledge
@@ -27,7 +27,15 @@ Separate three kinds of trust:
   a small deterministic checker confirms its evidence. Otherwise it is unknown.
 
 A fixed, verified policy evaluator turns these into Allow, Deny or Ask. Only
-Allow produces an authorization; the escrow on Arc pays only against one.
+Allow produces an automatic authorization. The escrow also permits explicit
+buyer approval without a checker decision. Arc is the intended deployment.
+
+The current journal binds the funding customer, and replay state spans that
+customer's orders. The invoice path requires a buyer-approved authority to sign the exact document
+bytes, customer, PO and payment domain. An agent cannot edit a number or amount
+without a new signature. Source honesty and business-level deduplication still
+require operating procedures. See [the whitepaper](whitepaper.md) for current
+guarantees and validation scope.
 
 ```mermaid
 flowchart LR
@@ -36,12 +44,12 @@ flowchart LR
   D --> A[Agent / LLM]
   A -- "line claims + evidence" --> C[Tier 1 checker]
   P --> C
-  S[Signed: vendor credential, PO, reviewer] --> V[Signature + binding checks]
+  S[Signed: vendor, PO, invoice source, reviewer] --> V[Signature + binding checks]
   P --> F[Facts]
   C --> F
   V --> F
   F --> E["evaluate3: Allow / Deny / Ask (Verus-proved)"]
-  E -- Allow --> J[14-word authorization journal]
+  E -- Allow --> J[15-word authorization journal]
   J --> X[InvoiceEscrow on Arc]
 ```
 
@@ -89,7 +97,7 @@ sequenceDiagram
     alt Allow, below threshold, within allowance
         Signer-->>Agent: journal + signature
         Agent->>Chain: settleSigned(journal, signature)
-        Chain->>Chain: 14 checks + threshold + allowance + order's signer
+        Chain->>Chain: journal and customer checks + threshold + allowance + order's signer
         Chain-->>Vendor: USDC
     else Ask
         Signer-->>Agent: no signature, ask record (see 5d)
@@ -100,7 +108,7 @@ sequenceDiagram
 
 Measured: 0.04 s from reading the order to settled transaction on a local chain.
 
-### 5b. Proof mode (at or above the threshold)
+### 5b. Proof mode (any amount within the order bounds)
 
 ```mermaid
 sequenceDiagram
@@ -115,16 +123,17 @@ sequenceDiagram
     alt Allow
         Prover-->>Agent: receipt (journal + proof), wrapped for EVM
         Agent->>Chain: settle(seal, journal)
-        Chain->>Chain: 14 checks + verifier.verify(seal, imageId, sha256(journal))
+        Chain->>Chain: journal and customer checks + verifier.verify(seal, imageId, sha256(journal))
         Chain-->>Vendor: USDC
     else Ask / Deny
         Prover-->>Agent: no journal (nothing to prove)
     end
 ```
 
-Measured: about 20 minutes to prove on 4 CPUs (224–236 s on the author's
-machine); the EVM wrap needs Docker or a GPU prover. The order's funds are already
-reserved, so the wait is latency, not counterparty risk.
+The historical 224–236 s figures describe earlier task-guest succinct proofs,
+not the current invoice guest or its Groth16 wrap. Benchmark the current image
+separately. Funding is reserved, but evidence, proof generation and settlement
+must finish before the deadlines or the unpaid balance can return to the buyer.
 
 ### 5c. Which mode applies
 
@@ -226,7 +235,7 @@ What it takes to deploy and run the demo on Arc testnet, as of 2026-09-23.
 | Buyer wallet | Funds orders naming the signer, holds the PO key, calls `offer`, `settleApproved` and `revokeSigner` | Local test key only |
 | Vendor wallet and registry key | Vendor accepts orders and receives USDC; the registry key signs the vendor credential | Local test keys only |
 | Signing service | One host running `warrant-host invoice-sign` with the policy file, the signer key and read access to an Arc RPC endpoint; any Linux box or container. Signed settlement measured at 0.04 s | Works locally |
-| Prover | An x86 machine with Docker, for the reproducible guest build and the Groth16 wrap, ideally with a GPU. On 4 CPUs the succinct proof takes about 20 minutes. `scripts/prover-vm.sh` sets it up | Blocking for the proof leg: this environment has no Docker |
+| Prover | An x86 machine with Docker, for the reproducible guest build and the Groth16 wrap, ideally with a GPU. Current invoice proving cost is not established by the historical task-guest timings. `scripts/prover-vm.sh` sets it up | Blocking for the proof leg: this environment has no Docker |
 | Agent runtime | An LLM call that reads the invoice and proposes line claims, plus a relayer wallet that submits transactions (anyone may relay) | Claims are assembled by `scripts/invoice-demo.py` today |
 | Demo data | Real invoices; the hackathon disqualifies synthetic data. Real UBL XML from an actual vendor is the remaining gap | Fixtures only |
 | Presentation | The deck (`showcase/warrant-showcase.pdf`) and a block explorer tab on Arc showing the settlement transactions | Deck ready; live transactions pending deployment |

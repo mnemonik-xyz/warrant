@@ -1,15 +1,13 @@
 # Warrant
 
-Two independently versioned prototypes explore policy-controlled agent payments:
+One prototype explores policy-controlled agent payments:
 
 - [Policy execution](policy-execution/README.md): a fixed Rust policy evaluator,
   Verus correctness proofs, authenticated evidence and RISC Zero execution proofs.
-- [Proof-backed payments](proof-execution/README.md): the earlier Circom/Groth16
-  prototype with an ERC-20 payment vault and local EVM tests.
 
-The directories are Git submodules pinned to specific commits. To fetch their
+The directory is a Git submodule pinned to a specific commit. To fetch its
 contents after cloning this repository, run `git submodule update --init --recursive`.
-Each prototype documents its own setup, tests, diagrams and limitations.
+The prototype documents its own setup, tests, diagrams and limitations.
 
 ## Design documents
 
@@ -24,6 +22,7 @@ Each prototype documents its own setup, tests, diagrams and limitations.
 - [Showcase deck, PDF](showcase/warrant-showcase.pdf) (10 slides, 1280×720; last slide carries a QR code to this repository)
 - [Real invoices: specification and collection guide](real-invoices/spec.md) ([по-русски](real-invoices/spec.ru.md))
 - [Use case: automated hardware purchase between agents](hardware-purchase/spec.md)
+- [Solver bounty: proof-based acceptance and result delivery](solver-bounty/README.md)
 - [Warrant for swaps: policy-attested cross-chain settlement](swap/spec.md) (chain-agnostic HTLC swap authorization, safety checks and chain primitives; [implementation specification](swap/implementation.md), [tasks](swap/tasks.md))
 
 ## Restoration on 2026-09-22

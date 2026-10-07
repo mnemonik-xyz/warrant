@@ -1,6 +1,6 @@
 # Warrant for USDC: flow, trust assumptions and attack surface
 
-Status: 2026-09-24. Review notes behind the signer, approval and signing-service design in
+Status: customer isolation and claim corrections, 2026-09-30. Historical measurements are from 2026-09-24. Review notes behind the signer, approval and signing-service design in
 `policy-execution/contracts/src/InvoiceEscrow.sol` and `host/src/signer.rs`.
 Companion to [`case.md`](case.md) (the case with diagrams) and
 [`pitch.md`](pitch.md).
@@ -45,7 +45,7 @@ UBL — Universal Business Language; ERC-20 — Ethereum token standard.
    calls `settleApproved(orderId, obligationId, amount, documentHash)` with
    their own key.
 9. The escrow checks the journal or the approval against the order and pays the
-   vendor. Each obligation ID pays once, across all three paths.
+   vendor. Each obligation ID pays once per funding customer, across that customer's orders and all three paths.
 10. After `settleBy`, anyone closes the order; the unpaid remainder returns to
     the buyer. The buyer may `revokeSigner(orderId)` at any time; proofs and
     approvals still settle.
@@ -57,6 +57,7 @@ UBL — Universal Business Language; ERC-20 — Ethereum token standard.
 | Signing service and key (buyer-run, named per order) | Running the exact interpreter on the agent's raw request, its own policy and the live order | Signatures the policy would not allow, inside that order's allowance and threshold |
 | Buyer | Their own funds, policy, PO key, and approvals of undecided invoices | Their own risk; approval pays only the accepted vendor within the ceiling |
 | Vendor registry key | Tax ID → address and category | Cannot redirect funds: the order's recipient is fixed at `offer` and mismatches revert |
+| Invoice-source key | Exact document endorsement after independent intake | False or reissued invoices within policy and order bounds |
 | PO key (buyer) | Order lines and ceilings | Bounded by the policy's PO limits |
 | Rust interpreter (`authorize_invoice`, parser, checker) | Correct decisions | Verus proves only `evaluate`/`evaluate3`; the rest is tested, not proved |
 | RISC Zero verifier and image ID | Proof path only | A wrong image ID at deployment accepts nothing, or the wrong program |
@@ -64,20 +65,28 @@ UBL — Universal Business Language; ERC-20 — Ethereum token standard.
 | Relayer | Nothing | Anyone may submit |
 | Chain | Timestamps and finality | Windows and deadlines use `block.timestamp` |
 
-**Key property.** A stolen signer key cannot redirect money. The escrow pays only
-the accepted vendor of an order. Without a complicit vendor the attacker gains
-nothing; with one, the loss is at most `min(remaining ceiling, signerAllowance)`
-of the orders that name that key, in sub-threshold pieces, from funds the buyer
-already committed to those vendors. Orders naming other keys are untouched.
+**Key property.** A stolen signer key cannot redirect payment from an accepted
+order's vendor. It can cause false or premature payments and exhaust the
+remaining allowance even without a complicit vendor. Signature-authorized loss
+per order is at most `min(remaining ceiling, remaining signer allowance)`.
+It cannot directly debit an order naming another key. Because replay state is
+shared per customer, a compromised signer can consume an obligation ID and block
+that ID on the same customer's other orders. The spending allowance does not
+bound that availability impact; other customers remain isolated.
+
+Order IDs include the funding customer from `msg.sender`. The 15-word journal
+includes the same customer, bound into the v2 invoice policy commitment. Replay
+state is `consumed[customer][taskId]`: another customer cannot occupy an order ID
+or consume a victim's obligation through their own buyer-approval path.
 
 ## 3. Attack surface
 
 | Attack | Result | Mitigation |
 |---|---|---|
-| Stolen signer key, honest vendor | Nothing | Recipient bound on chain |
+| Stolen signer key, honest vendor | False or premature payment and budget exhaustion | Recipient and cumulative signer allowance bound on chain |
 | Stolen signer key, complicit vendor | Fake invoices under a real order | `proofThreshold` per payment; `signerAllowance` per order; only orders naming that key; obligation IDs consumed; `revokeSigner` |
 | Splitting a large payment into sub-threshold pieces | Same as above | The allowance caps the total, not just each payment |
-| Replaying a signed journal | Paid once | `consumed[taskId]` across orders and both paths |
+| Replaying a signed journal | Paid once | `consumed[customer][taskId]` across that customer's orders and all paths |
 | Replay on another chain or escrow | Rejected | Journal binds chain ID and escrow; the signing digest binds them again |
 | Signature malleability | Second valid encoding | OpenZeppelin `ECDSA.recover` rejects high-s; replay is blocked anyway |
 | Stale `po_spent` given to the signer or prover | Over-ceiling authorization | The service reads `spent` from the escrow; the contract uses live `spent` on every path |
@@ -86,11 +95,13 @@ already committed to those vendors. Orders naming other keys are untouched.
 | Signer key used on an order that names another signer | Cross-order signing | Contract recovers against the order's `signer`; the service refuses to sign for such orders |
 | Buyer approves a fabricated invoice | Buyer pays their own vendor | Their own funds, the accepted vendor, within the ceiling; a later proof of the same obligation reverts |
 | Vendor named as its own signer | Vendor signs its own invoices | `offer` rejects `signer == recipient` |
-| Prompt injection in an invoice line | Model mislabels a line | Selecting fields never come from text; a wrong label can only cause Ask |
+| Prompt injection in an invoice line | Model mislabels a line | Claim evidence is checked; failed evidence leaves a label unknown. Other branches can still decide the result |
 | Payment details printed on the invoice | Redirect | Ignored: address comes from the vendor credential |
 | Duplicate invoice, new number | Double payment | Obligation ID = seller tax ID + invoice number; per-PO ceiling |
-| Order-ID squatting | Denial of service | Squatter's funds can only pay the same vendor under the same policy; use unguessable order numbers |
-| Vendor and agent collude with real credentials | Fake invoices within a real PO | Bounded by the PO ceiling; the checker verifies text, not truth |
+| Another buyer copies policy and PO identifiers | Separate order namespace | Order ID includes the funding customer from `msg.sender` |
+| Another buyer approves a victim obligation ID | Separate replay namespace | Consumption is indexed by customer on every path |
+| Agent alters invoice bytes with reusable credentials | Automatic authorization rejected | Mandatory source attestation binds exact bytes, customer, PO and scope |
+| Invoice authority endorses false or reissued debt | May authorize within remaining bounds | Source honesty and business-level deduplication remain trusted |
 | Malicious XML (DTD, entity expansion) | Parser abuse | Own restricted parser: no DTD, size and depth limits |
 
 ## 4. What is proved, tested, or assumed
@@ -98,13 +109,11 @@ already committed to those vendors. Orders naming other keys are untouched.
 - **Proved (Verus):** the rule evaluator matches its specification; Allow and
   Deny are sound for every completion of unknown facts. 16 obligations, 14
   deliberate bugs rejected.
-- **Tested:** 40 Rust tests in the checker (fixtures E1–E13 and authority checks)
-  and 3 in the signer service, 57 Solidity tests including fuzzing on the ceiling
-  and the allowance, per-order signer isolation and buyer-approval bounds,
-  removed-check experiments on the settlement paths, and cross-language fixtures
-  for the journal and the signature. The local demo exercises all three paths,
-  a smuggled `po_spent` and an unnamed signer.
-- **Assumed:** honest signer service (per order), honest registry and buyer keys,
+- **Tested (2026-09-30):** 62 Rust tests and 62 Solidity tests, including new
+  cross-customer interference regressions, customer-bound journal tests and
+  guest/native agreement. Three historical receipt tests were skipped. See
+  [the validation record](policy-execution/validation-results.md) for scope.
+- **Assumed:** honest signer service (per order), honest registry, invoice-source and buyer keys,
   an honest RPC endpoint for the service's reads (a lying endpoint can only make
   it refuse or sign something the contract then rejects), a standard token, and a
   correct RISC Zero verifier.
@@ -114,5 +123,5 @@ already committed to those vendors. Orders naming other keys are untouched.
 - Guest image IDs are build-specific unless built with `RISC0_USE_DOCKER=1`;
   deploy with the reproducible ID. Not yet exercised on a Docker machine.
 - The Groth16 wrap needs Docker or a GPU prover; proving takes minutes on a CPU.
-- Only USD invoices in UBL are parsed; Factur-X/CII and other currencies go to Ask.
+- Only UBL invoices are parsed; unsupported roots are rejected and parsed non-USD invoices return Ask.
 - No per-category or per-period budgets yet; the escrow bounds per order.

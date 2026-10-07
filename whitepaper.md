@@ -1,11 +1,14 @@
 # Warrant: proof-carrying authorization for agent payments
 
-Version 0.1 · 2026-09-30
+Version 0.2 draft · 2026-09-30.
 
-This document describes `warrant` at commit `8b31c48` and `policy-execution` at
-commit `c589871`. Measurements come from local runs on 2026-09-23 and 2026-09-24,
-on 4 vCPUs with no GPU. This document marks each claim as proved, tested or
-assumed. No public deployment and no real invoice traffic exist yet.
+This document describes the working revision based on `policy-execution` commit
+`c589871`, including customer isolation and mandatory invoice-source authentication added
+on 2026-09-30. Historical
+results are distinguished from checks of this revision. No public deployment or
+real invoice traffic is recorded in the repository. The invoice policy schema
+and journal have changed; earlier receipts do not validate the current invoice
+guest. See section 11 for validation limits.
 
 Companion documents: [the case, with diagrams](case.md),
 [the flow, trust assumptions and attack surface](design-review.md),
@@ -17,7 +20,7 @@ Abbreviations: AP — accounts payable; API — application programming interfac
 CII — UN/CEFACT Cross Industry Invoice; DTD — Document Type Definition;
 ERC-20 — a token interface standard for the Ethereum Virtual Machine;
 LLM — large language model; PO — purchase order; RPC — remote procedure call;
-STE — Simplified Technical English; TCB — trusted computing base;
+TCB — trusted computing base;
 UBL — Universal Business Language; USDC — USD Coin; XML — Extensible Markup
 Language; XXE — XML External Entity; zkVM — zero-knowledge virtual machine.
 
@@ -32,15 +35,18 @@ make the payment safe by trusting the model, the vendor, or the channel.
 
 Warrant gives the agent the work and keeps the authority to pay. The agent reads
 invoices and makes proposals. A small checker program makes the decision. An
-escrow contract on the Arc blockchain releases the money. The escrow accepts only
+escrow contract releases the money; Arc is the intended deployment network. The escrow accepts only
 an authorization that the escrow itself can examine.
 
 Three properties support this design:
 
-- Each fact that reaches the decision has a recorded provenance. A fact is
-  `Signed`, `Derived` or `Checked`. Everything else is `Unknown`.
-- The decision has three values: `Allow`, `Deny` and `Ask`. An unknown fact can
-  only cause `Ask`. It can never cause a payment.
+- The checker authenticates credentials and an invoice-source attestation, derives values from document bytes,
+  and checks submitted label evidence. Missing evidence can leave facts unknown.
+  These are distinct code paths, not a general per-fact provenance log.
+- The decision has three values: `Allow`, `Deny` and `Ask`. `Allow` means the
+  policy holds for every completion of the remaining unknown facts. Unknown
+  facts can coexist with `Allow` when another branch is sufficient.
+
 - The escrow has no administrator, no policy setter, no pause control and no
   administrative withdrawal. The buyer sets the bounds one time, when the buyer
   funds an order.
@@ -64,10 +70,10 @@ Three usual answers do not solve this problem:
 
 - **A careful prompt.** A prompt is an instruction to the model. The attacker
   also writes instructions to the model. A prompt is not a control.
-- **A signature on the model output.** A signature proves which key produced the
+- **A signature on unchecked model output.** A signature proves which key produced the
   output. It does not prove that the output is correct.
-- **A zero-knowledge proof over that signature.** This proves the same wrong
-  thing with more mathematics.
+- **A proof that only verifies that signature.** It establishes signature
+  validity, without establishing policy compliance or invoice truth.
 
 The business needs a different property. The statement "the agent did the right
 thing" must not depend on the model.
@@ -89,16 +95,25 @@ result together with evidence. A small trusted checker examines that evidence.
 Necula described this pattern in 1997. Warrant applies it to an agent that spends
 money.
 
-The trusted computing base for the decision contains four items: the parser, the
-evidence checker, the rule evaluator and the escrow contract. The agent, the LLM
-and the channel that delivered the invoice stay outside it.
+The application components trusted for the decision are the parser, evidence
+checker, rule evaluator and escrow contract. Credential issuers and policy
+authors are trusted for the facts and rules they approve. The signature path
+also trusts its signing service. The proof path relies on the zkVM, verifier,
+cryptography and build tools. Section 7 describes proof scope.
+
+The agent and delivery channel are untrusted. Before automatic authorization,
+the checker verifies an invoice-source signature over the exact document hash,
+customer, PO, payment domain and validity interval. The buyer chooses that source
+key in the approved policy. Its owner must establish invoice provenance through
+trusted intake or issuance; blindly signing agent submissions defeats this control.
 
 ---
 
 ## 4. Where every fact comes from
 
-The checker accepts three kinds of fact. It records the provenance next to the
-value. A bare assertion from the agent is never a fact.
+The checker obtains facts through three paths. Their sources are reflected in
+the input types and checking code; no general `Signed`/`Derived`/`Checked` tag
+is stored beside each evaluator value. An unsupported label stays unknown.
 
 ### 4.1 Signed facts
 
@@ -110,12 +125,20 @@ An authority that the buyer approved signs these facts.
 - The **buyer** signs a purchase order. The order contains the order
   identifier, the vendor tax identifier, a lifetime ceiling, the order lines and
   a validity period. Each line maps an item identifier to a category.
+- An **invoice authority**, selected by the buyer through `invoice_key`, signs
+  an `InvoiceAttestation`: payment scope, funding customer, PO identifier, exact
+  document SHA-256 and validity interval. This is mandatory for automatic
+  authorization, independent of the rule tree. The key can belong to a vendor
+  issuer or a trusted buyer intake system; the deployment must define its role.
 - A **reviewer** can sign an acceptance statement. The policy needs this
-  statement only when the rule tree contains the `Accepted` atom. Milestone work
-  uses this path. Ordinary invoice payment does not.
+  statement when the decision depends on an affirmative `Accepted` atom. An
+  `Any` branch can make that atom unnecessary. The default invoice fixture
+  does not require acceptance.
 
-The buyer approves these keys before the agent selects any vendor. A new vendor
-therefore needs no new approval from the buyer for each address.
+The buyer approves the authority keys in the policy and fixes the recipient
+when funding an order. A registry credential lets the checker authenticate the
+chosen vendor. If invoice issuance uses a vendor-specific key, changing vendors
+can also require approving a different invoice-source key.
 
 ### 4.2 Derived facts
 
@@ -159,35 +182,32 @@ only when the evidence passes a deterministic test.
 Any other case leaves the label `Unknown`. The buyer approves the lexicon as part
 of the policy, so the policy hash covers it.
 
-Span evidence proves that the invoice text says something. It does not prove that
-the statement is true, because the vendor writes the text. The signed credential,
-the order ceiling and the escrow bound a dishonest vendor. The evidence checker
-does not.
+Span evidence proves that the authenticated document text contains a configured
+term. It does not establish semantic truth, delivery or fair pricing. An agent
+cannot edit the number, amount or text without invalidating the invoice-source
+attestation. A dishonest or compromised invoice authority can still endorse
+false documents or reissue the same debt under different numbers; order ceilings
+bound the resulting spend, rather than proving the debt legitimate.
 
-### 4.4 The invariant that carries the design
+### 4.4 Authority and evidence boundaries
 
-**Fields that select must never come from the text or the model. Fields that
-quantify can.**
+The payment address and vendor category come from the registry credential.
+The funded order and signed PO constrain the ceiling. Invoice payment details
+in `cac:PayeeFinancialAccount` do not select the recipient.
 
-The payment address, the vendor category and the spending ceiling come from
-signed credentials. The invoice can only quantify, through the amount, and
-reference, through the invoice number and the order identifier. The checker
-ignores the payment details that the invoice carries in
-`cac:PayeeFinancialAccount`.
+Other security-relevant values come from the document: amount, invoice number,
+PO reference, item identifiers and text used for label evidence. A document hash
+binds those bytes. The separate invoice-source signature authenticates the
+approved authority's endorsement; neither mechanism establishes a genuine debt.
 
-A model-chosen field that selects is a capability selector. A category carries
-the limits and the allowed list. A model that chooses its own category therefore
-chooses its own limits.
-
-Two more invariants follow:
-
-- **A checked claim can only restrict.** A claim label appears only in the
-  conjunctive atom `LineLabelsWithin`. No rule gives more authority because of a
-  claim than it gives when the label is `Unknown`. A model that an attacker
-  fools can at worst cause `Ask`.
-- **A positive claim needs evidence. The scan for negative facts is
-  exhaustive.** The parser scans every line against the deny lexicon. The model
-  cannot hide a denied term when it stays silent about a line.
+- **A label needs evidence.** An admitted label can resolve `Ask` to `Allow`.
+  Failed claim evidence leaves the label unknown; duplicate claims or invalid
+  line indices reject the request. `LineLabelsWithin` may occur under `All` or
+  `Any`; the grammar does not require it to be a mandatory conjunct.
+- **The deny scan does not depend on submitted claims.** Every parsed item name
+  and description is scanned for the policy's literal ASCII terms. This does
+  not cover all synonyms, spellings, languages or unparsed fields. The policy
+  must require `NoDeniedTerm` for a hit to prevent authorization.
 
 ---
 
@@ -202,12 +222,12 @@ flowchart LR
   D --> A[Agent and LLM]
   A -- "claims with evidence" --> C[Evidence checker]
   P -- "derived facts and line text" --> C
-  S[Signed credentials] --> V[Signature and binding checks]
-  P --> F[Facts with provenance]
+  S[Signed credentials and invoice attestation] --> V[Signature and binding checks]
+  P --> F[Checked and derived facts]
   C --> F
   V --> F
   F --> E["evaluate3: Allow, Deny or Ask"]
-  E -- Allow --> J[14-word authorization]
+  E -- Allow --> J[15-word authorization]
   J --> X[InvoiceEscrow on Arc]
 ```
 
@@ -215,44 +235,82 @@ flowchart LR
 |---|---|---|
 | `Allow` | The policy permits this payment under every completion of the unknown facts. | The checker emits an authorization. |
 | `Deny` | The policy refuses this payment under every completion. | No authorization exists. |
-| `Ask` | The facts do not decide the question. | The checker returns its reasons and signs nothing. |
+| `Ask` | The evaluator cannot establish a decisive result; it can be conservative. | The checker returns its reasons and signs nothing. |
 
-The rule grammar contains no negation, so every atom is monotone. The evaluator
-uses this property. It evaluates the rule tree two times through the same
-verified function:
+Missing invoice-source evidence returns `Ask(InvoiceAttestationMissing)` before
+rule evaluation. A partial attestation, wrong signature or mismatched document,
+customer, PO or scope is rejected. A permissive rule branch cannot bypass this
+authentication gate. Buyer approval is a separate explicit override.
 
-1. The pessimistic pass maps each unknown atom to false. A result of true means
-   `Allow`.
-2. The optimistic pass maps each unknown atom to true. A result of false means
-   `Deny`.
-3. Any other combination means `Ask`.
+The implementation recursively evaluates the rule tree with strong Kleene
+three-valued logic. `All` denies if a child denies, allows if all children allow,
+and otherwise asks. `Any` allows if a child allows, denies if all children deny,
+and otherwise asks. For example, `Any(true, unknown)` allows and
+`All(false, unknown)` denies. It does not run two Boolean evaluation passes.
 
-`Ask` is an escalation path. It is not a failure. An unreadable format, an
-unfamiliar currency, an inconsistent total or an unlabelled line all produce
-`Ask`. The buyer then decides.
+The proved guarantee is soundness of decisive results, not completeness over
+all completions: `Ask` can occur conservatively even when all completions agree.
+
+`Ask` is an escalation path. A parsed non-USD invoice or inconsistent total
+produces `Ask`. An unlabelled line produces `Ask` only if the policy remains
+undecided. Malformed XML, unsupported document roots and invalid credentials
+return errors, not `Ask`; they emit no authorization.
+
+### 5.1 Worked fixture
+
+The synthetic fixture uses a signed vendor credential in category 7 and a signed
+PO with a 3,000 USDC ceiling. Its invoice has 1,200 USD in line amounts plus
+120 USD tax. The policy requires all of: line labels in `{7, 9}`, no denied
+term, sufficient PO balance, amount at most 2,000 USDC and vendor category 7.
+With matching PO-line claims, an invoice-source attestation and no prior spend,
+the checker allows 1,320 USDC.
+
+Remove a required line claim and the result is `Ask`. Put `vodka` in a parsed
+item description and the required deny-term check denies payment. A successful
+settlement consumes that customer's obligation ID and leaves 1,680 USDC in the
+order. Changing the invoice number or consistently increasing its amounts
+without a new source attestation is rejected. Removing the attestation returns
+Ask even under a permissive policy. A fresh attestation for a reissued number
+can still authorize another payment; the authority must manage business-level
+uniqueness and the order ceiling remains the final spending bound.
 
 ---
 
 ## 6. The authorization record
 
-Only `Allow` produces an authorization. The authorization is 14 words of 32
+Only `Allow` produces an authorization. The authorization is 15 words of 32
 bytes each, in this order:
 
 ```text
 policyHash, chainId, vault, token, recipient, amount, taskId, deliverableHash,
-policyVersion, validAfter, validUntil, evidenceHash, poId, poMaxTotal
+policyVersion, validAfter, validUntil, evidenceHash, poId, poMaxTotal, customer
 ```
 
 For an invoice, `taskId` is the obligation identifier and `deliverableHash` is
 the document hash. The obligation identifier is:
 
 ```text
-taskId = H("warrant/obligation/v1", seller_tax_id, invoice_number)
+taskId = hash_tagged("warrant/obligation/v1",
+                     (tax_id_hash(seller_tax_id), trim(invoice_number)))
 ```
 
-The trusted side computes this identifier. The agent therefore cannot create a
-new identifier for a duplicate invoice. The escrow consumes each identifier one
-time, across all orders and all settlement paths.
+The checker computes this identifier from the supplied document. An identical
+seller and invoice number produces the same identifier. A changed number
+produces a different identifier, but the agent cannot authorize that change
+without a new invoice-source signature. This is not semantic duplicate detection.
+Consumption spans all orders and settlement paths of one funding customer.
+Another customer cannot consume that customer's identifiers.
+
+The appended `customer` is part of the approved invoice policy and the signed or
+proven journal. Invoice policy commitments use `warrant/invoice-policy/v2`.
+Old 14-word journals are rejected by this contract revision.
+
+`hash_tagged` is SHA-256 over a length-prefixed domain tag and bincode 1.3
+serialization of the typed value. Tax identifiers retain only ASCII letters
+and digits and are uppercased; invoice numbers are trimmed but otherwise exact.
+The schema and field ordering are part of the pinned interpreter. Changing JSON
+whitespace does not change typed policy commitments; changing XML bytes does
+change the invoice document hash.
 
 Two separate commitments pin the system:
 
@@ -269,7 +327,7 @@ under an existing image identifier.
 ## 7. What the proof covers
 
 Verus proves the rule evaluator against a written specification. The proof result
-on the current code is **16 obligations verified, 0 errors**. The proof runner
+recorded on 2026-09-23 is **16 obligations verified, 0 errors**. The proof runner
 rejected **14 of 14** deliberate bugs, which include a bug that treats `Ask` as
 `Allow`.
 
@@ -300,7 +358,7 @@ separate. Record the verified source hash and the guest image for each release.
 
 ## 8. The escrow
 
-`InvoiceEscrow` holds the buyer USDC, one purchase order at a time. The contract
+`InvoiceEscrow` holds funds for multiple customers and purchase orders. The contract
 has no owner, no upgrade function, no policy setter, no pause authority and no
 administrative withdrawal. One deployment fixes the token, the verifier and the
 interpreter image identifier.
@@ -310,7 +368,7 @@ interpreter image identifier.
 ```mermaid
 stateDiagram-v2
     [*] --> Offered: the buyer funds the ceiling
-    Offered --> Accepted: the vendor accepts before acceptBy
+    Offered --> Accepted: the vendor accepts by acceptBy
     Offered --> Closed: the buyer cancels, or anyone acts after acceptBy
     Accepted --> Accepted: one invoice settles
     Accepted --> Closed: anyone acts after settleBy
@@ -333,15 +391,17 @@ stateDiagram-v2
 4. After `settleBy`, anyone can call `close`. The unpaid remainder returns to the
    buyer.
 
-The order identifier is `keccak256(chainId, escrow, policyHash, poId)`. Order
-numbers repeat between buyers. The policy commitment contains the buyer PO key,
-so it keeps the orders separate.
+The order identifier is
+`keccak256(abi.encode(chainId, escrow, customer, policyHash, poId))`.
+`offer` takes the customer from `msg.sender`; settlement takes it from the
+authenticated journal. Copying another customer's policy hash and PO ID cannot
+occupy their order namespace. Replay state is also indexed by customer.
 
 ### 8.2 What settlement enforces
 
 The proof path and the signature path use the same checks:
 
-- The journal has exactly 14 words.
+- The journal has exactly 15 words, including the funding customer.
 - The order exists, is accepted, and `settleBy` has not passed.
 - The policy version, the chain identifier, the escrow address and the token
   match.
@@ -366,15 +426,15 @@ invoice. Only the contract knows these.
 
 | Path | Condition | Authority | Recorded time |
 |---|---|---|---|
-| `settleSigned` | The amount is below the proof threshold of the order. | The signing service that the buyer named for that order. | 0.04 s, measured on a local chain |
-| `settle` | The amount is at or above the threshold. | A zero-knowledge proof that the checker ran on those bytes. | Minutes of CPU time |
-| `settleApproved` | The checker returned `Ask`. | The buyer, with the buyer key. | One transaction |
+| `settleSigned` | The amount is below the proof threshold of the order. | The signing service that the buyer named for that order. | Measure for the current deployment |
+| `settle` | Any amount within the order bounds, including below the threshold. | A zero-knowledge proof that the checker ran on those bytes. | One local sample: 445.65 s proving + 79.73 s wrapping |
+| `settleApproved` | Explicit buyer authorization; no `Ask` result is required on chain. | The buyer, with the buyer key. | One transaction |
 
 ### 9.1 The signature path
 
 The buyer runs the signing service. The service holds the policy file and the
 signing key. The agent sends a request that contains the invoice bytes, the line
-claims and the signed credentials.
+claims, the signed credentials and the invoice-source attestation.
 
 The request type rejects unknown fields. A request that carries its own policy or
 its own spend figure therefore fails to parse. The service reads the order from
@@ -386,18 +446,22 @@ The service refuses to sign unless the order names this key, the order is live,
 and the policy matches. It then runs the same checker natively, with the spend
 figure that it read from the chain.
 
-The recorded time is 0.04 s. This measurement covers the period from the read of
-the order to the settled transaction on a local chain.
+Measure the period from the order read through transaction confirmation. Local
+Anvil timing does not predict public-network latency; section 11 separates
+historical observations from current validation.
 
 ### 9.2 The proof path
 
 A prover runs the same code inside the RISC Zero zkVM. The prover is untrusted.
 It can hold any input, because the live checks in the contract bound it. The
-proof needs minutes of CPU time. A GPU reduces this time.
+proof adds work beyond native evaluation. Benchmark the current guest and
+chosen proving backend before choosing thresholds or settlement deadlines.
 
-The proof path does not block a small payment, because the signature path handles
-small payments. The wait is latency and not counterparty risk, because the
-contract reserved the money when the buyer funded the order.
+The signature path can avoid proving for small payments when its signer is
+available, not revoked and has sufficient allowance. Reserved funding removes
+dependence on the buyer maintaining an unreserved balance. It does not guarantee timely payment: evidence, proving and transaction
+inclusion must complete before the deadlines. Otherwise the buyer can recover
+the unpaid balance.
 
 ### 9.3 The approval path
 
@@ -409,6 +473,24 @@ The buyer reads the invoice and decides. The buyer then calls `settleApproved`.
 The same order, ceiling, deadline and obligation rules apply. The signer
 allowance and the proof threshold do not apply, because this is the explicit
 decision of the buyer with the buyer key.
+
+### 9.4 Why offer a proof path?
+
+Both automatic paths run the deterministic checker; neither trusts model output
+as a payment instruction. Their additional trust and costs differ:
+
+| Path | What the contract learns | Additional dependency | Tradeoff |
+|---|---|---|---|
+| Signature | A named key authorized this journal | Honest service, policy loading and key custody | Native evaluation avoids proving work; compromise can spend the remaining signer allowance. |
+| Proof | The pinned guest emitted this journal | zkVM, verifier, build identity and cryptographic assumptions | An independent prover needs no settlement key, but proving adds cost and deadline risk. |
+| Buyer approval | The funding buyer authorized this payment | Buyer's decision and wallet | Handles exceptions without proving policy compliance. |
+
+A proof can make payment independent of the buyer-run signing service while
+keeping policy and witness inputs off chain. The prover still sees its inputs;
+recipient, amount, customer and identifiers are public. The proof authenticates
+execution, including invoice-source signature verification. It does not prove
+that the source is honest, the invoice is a unique debt or goods were delivered.
+Whether this benefit justifies proving cost for a given payment requires measurement.
 
 ---
 
@@ -422,39 +504,50 @@ This is the most important bound in the system.
 when the buyer funds the order. A signature that names a different address
 reverts.
 
-An attacker with no accomplice therefore gains nothing. An attacker with a
-dishonest vendor can take at most the remaining ceiling or the signer allowance,
-whichever is smaller. The loss applies only to the orders that name that key. The
-money was already committed to that vendor.
+A compromised signer can cause false or premature payments to the fixed vendor
+and exhaust its allowance. Direct extraction requires control of, or cooperation
+from, that recipient; financial disruption does not. Signature-authorized loss
+per order is bounded by the smaller of the remaining ceiling and remaining
+signer allowance. Conditional funding does not make every payment legitimate.
 
-Division of a large payment into small parts does not help the attacker. The
-allowance limits the total and not each payment. The buyer calls
-`revokeSigner` for one order and the signature path stops. Proofs and approvals
-continue. The `offer` function refuses an order in which the signer is the
-vendor.
+Replay state is shared across one customer's orders. A compromised settlement
+signer can also consume an arbitrary obligation ID through an order it can
+authorize, blocking that ID on the same customer's other orders. The allowance
+bounds payments, not this availability impact. Other customers remain isolated.
+
+Splitting a payment can avoid a per-payment proof threshold, but cannot bypass
+the cumulative signer allowance. The buyer can revoke the signer per order.
+Proofs and approvals remain available, subject to their own requirements and
+deadlines. `offer` rejects an identical signer and recipient address; this does
+not prevent one actor from controlling two different addresses.
 
 ### 10.2 The attack surface
 
 | Attack | Result | Control |
 |---|---|---|
-| Prompt injection in a line | The model labels the line wrongly | Selecting fields never come from the text. A wrong label causes `Ask`. |
+| Prompt injection in a line | Claims may change or be omitted | Claims must pass PO or text-span checks. Those checks do not establish semantic truth. |
 | Payment details on the invoice | No effect | The address comes from the vendor credential. |
-| The same invoice sent two times | One payment | The escrow consumes the obligation identifier. |
+| Same seller and invoice number submitted twice by one customer | At most one settlement | Customer-scoped consumption across orders and paths. |
 | The same work under a new number | Refused above the ceiling | The order ceiling applies to the lifetime total. |
 | A stale spend figure sent to the service | No effect | The service reads the spend from the chain. The contract uses live state. |
-| A replayed signed journal | One payment | The consumed map covers all orders and all paths. |
+| A replayed signed journal | At most one payment per customer | The journal binds the customer; consumption spans that customer's orders and paths. |
 | Replay on another chain or escrow | Refused | The journal binds the chain identifier and the escrow address. |
 | Signature malleability | Refused | OpenZeppelin `ECDSA.recover` rejects a high `s` value. |
-| A signer key used on another order | Refused | The contract recovers against the signer of that order. |
-| A vendor named as its own signer | Refused | `offer` rejects this case. |
-| Malicious XML | Refused | The restricted parser rejects DTDs and limits size and depth. |
-| Order identifier squatting | Denial of service, not theft | The money of the squatter can pay only the same vendor under the same policy. Use order numbers that nobody can guess. |
-| A dishonest vendor with real credentials | False invoices inside a real order | The order ceiling bounds the loss. The checker examines text, not truth. |
+| A key used on an order naming a different signer | Refused | A shared signer key can authorize every order that names it, within each order's limits. |
+| Identical signer and recipient addresses | Refused | Address inequality does not prove the two keys have different owners. |
+| DTDs, oversized or over-deep XML | Refused | Specific parser checks; not a proof of parser security. |
+| Another customer copies order identifiers | Cannot occupy the victim's namespace | `offer` includes `msg.sender` in the order ID. |
+| Another customer approves the victim's obligation ID | Does not block the victim | Consumption is indexed by the funding customer. |
+| Agent alters an invoice while reusing credentials | Automatic authorization rejected | Mandatory source attestation binds the exact bytes, customer, PO and domain. |
+| Agent omits invoice-source evidence | Ask; no automatic authorization | Authentication is checked before the rule tree. |
+| Invoice authority endorses false or renumbered debt | May authorize within the order bounds | Source integrity and business-level uniqueness remain trusted; the ceiling bounds spend. |
 
 ### 10.3 What the system assumes
 
 - The signing service for each order is honest.
-- The registry key and the buyer keys are honest.
+- The registry, invoice-source and buyer keys are honest. The invoice authority
+  establishes origin independently of the untrusted agent and manages invoice
+  reissues; a signature alone does not enforce those operating procedures.
 - The token is a standard ERC-20 token.
 - The proof verifier is correct.
 - The RPC endpoint that the service reads is honest. A dishonest endpoint can
@@ -465,27 +558,53 @@ vendor.
 
 ## 11. Results
 
-| Item | Result |
+Current checks of the invoice-authentication and customer-isolation revision (2026-09-30):
+
+| Check | Result and scope |
 |---|---|
-| Formal proof | 16 obligations verified, 0 errors. 14 of 14 deliberate bugs rejected. |
-| Rust tests | 43. 40 in the checker and 3 in the signer service. |
-| Solidity tests | 57. These include fuzz cases on the ceiling and the allowance, signer isolation between orders, and removed-check experiments on each settlement path. |
-| Cross-language tests | A Solidity test recovers the signer from a signature that the Rust code produced. A second test decodes a journal field by field. |
-| Signature settlement | 0.04 s on a local chain, with the order read from the chain. |
-| Proof settlement | A real proof generated, wrapped and settled on a local chain. |
-| Arc testnet | A read-only simulation verifies a real proof, rejects a changed journal, reads USDC and constructs the escrow. |
-| Arc precompiles | `ecMul` at `0x07` and `ecPairing` at `0x08` answered correctly through `eth_call` on 2026-09-23. Groth16 verifiers can therefore run on Arc. |
+| Rust | 62 passing tests: 48 native policy/XML/invoice, 3 signer, 3 template, 2 issuer CLI and 6 guest execution tests. Three receipt tests were skipped because they require separately generated receipts. |
+| Solidity | 62 passing tests, including 29 invoice escrow tests and a real invoice proof settlement regression. Ceiling and signer-allowance fuzz tests use 256 cases each. |
+| Isolation regressions | Both attacks first failed the new regression tests on the old code. With the fix, another customer's approval cannot consume the victim's obligation, and a copied offer cannot squat the victim's order ID. |
+| Customer binding | Changing the journal customer invalidates the original signature and mock-approved proof. Same-customer replay across policies remains rejected. Old 14-word journals are rejected. |
+| Guest/native agreement | The rebuilt invoice guest emits the same 15-word journal as native evaluation for two customer addresses. Execution is not cryptographic proof generation. |
+| Cross-language encoding | Rust-generated journal and signature fixtures are decoded and checked in Solidity. |
+| Local settlement | Fresh Anvil deployment settled by signature, buyer approval and a real invoice proof, with replay rejection. Signed flow: 0.04 s; succinct proving: 445.65 s; Groth16 wrapping: 79.73 s. These are single local samples. |
 
-The fixtures E1 to E13 in
-[the evidence checker document](policy-execution/evidence-checker.md) cover the
-behaviour that section 10 describes. E2 is the prompt injection case.
+These are regression checks, not an audit or an end-to-end security proof.
+The retained current invoice proof settles through the real Solidity verifier;
+mutating any of its 15 journal words fails verification. A separate historical
+task receipt remains a verifier regression fixture.
 
-**Two figures need a new measurement.** The repository records the proof time as
-about 20 minutes on 4 vCPUs, and also as 224 to 236 seconds on the same machine.
-These two records disagree. The test counts also disagree: three current
-documents record 43 Rust tests, and the `policy-execution` README accounts for 49
-through a different method. Regenerate both figures from a test run before you
-publish them.
+The invoice proof used 2,097,152 guest cycles and eight segments, with four
+Rayon workers on a macOS ARM64 host reporting 14 CPUs. The succinct receipt
+was 224,186 bytes; the serialized Groth16 receipt was 1,457 bytes. Wrapping
+used an x86 Docker image under emulation. This run did not validate a
+reproducible Docker guest build or measure peak memory. Exact image, toolchain,
+artifact hashes and transaction results are retained in the
+[validation evidence](policy-execution/validation-evidence.json).
+
+Historical evidence is reported separately:
+
+- The [2026-09-23 evaluator record](policy-execution/verified/verification-results.md)
+  reports 16 Verus obligations and 14 rejected mutations. The verified evaluator
+  source is unchanged by the customer-isolation fix. The surrounding changes are
+  outside its proof scope.
+- The same record lists 223.98 s and 235.68 s for two **2026-09-22 task guest**
+  succinct proofs, four Rayon workers, four segments and 223,994-byte receipts.
+  These are not current invoice-guest timings and exclude a claim about total
+  invoice settlement latency.
+- Earlier narrative documents reported 0.04 s for local signed settlement and
+  about 20 minutes for proving without a complete, comparable benchmark record.
+  Those figures are not used as current performance claims here.
+- [Historical deployment validation](policy-execution/validation-results.md)
+  records local task settlement through a real verifier and read-only Arc
+  simulation. It does not establish a deployed current invoice escrow.
+
+Before a release, retain the exact source revision, fixture, guest image,
+compiler/toolchain, hardware, repeated timing samples, memory use and gas for
+native evaluation, guest execution, succinct proving, Groth16 wrapping and
+settlement separately. The current revision completed invoice proving, wrapping
+and local settlement; each subsequent guest revision requires fresh evidence.
 
 ### 11.1 What does not exist yet
 
@@ -493,9 +612,9 @@ publish them.
 - No real invoice traffic. Only fixtures exist.
 - No budget for each category or for each period. The escrow bounds each order.
 - UBL 2.1 and US dollars only. CII and Factur-X are not implemented. Every other
-  format and currency produces `Ask`.
-- The Groth16 wrap and the reproducible guest build need Docker or a GPU. The
-  development machine has neither.
+  format is rejected; parsed non-USD invoices produce `Ask`.
+- The documented reproducible guest build uses Docker on x86; that build path
+  was not validated in this run.
 - No security audit.
 
 ---
@@ -508,26 +627,15 @@ The invoice product is one instantiation. The core pattern is:
 intent → policy → facts with provenance → decision → authorization → execution
 ```
 
-An earlier design applied the same core to a different domain. In that design a
-parent writes spending rules for a child. A fiscal receipt supplies the signed
-facts. The receipt format supplies tag 1212, which marks excisable goods such as
-alcohol and tobacco. A hard ban therefore needs no LLM at all. A small model
-labels the soft categories, and the same evidence checker examines those labels.
-The same three values come out. See [the earlier design](tech-design.md) and
-[the earlier description](short.md).
+Earlier documents propose [a child's spending wallet](tech-design.md) and
+[hardware purchases between agents](hardware-purchase/spec.md). These are
+application designs, not capabilities established by the invoice test suite.
 
-Two properties move between domains without change:
-
-- The provenance discipline of section 4.
-- The three-valued decision and its proof, from section 5 and section 7.
-
-The parts that change are the parser for the document format, the lexicon and the
-rule atoms. This is the argument that Warrant is a control layer and not one
-feature of one product.
-
-A third application exists as a specification:
-[an automated hardware purchase between agents](hardware-purchase/spec.md).
-
+The reusable part is the separation between authenticated evidence, explicit
+policy evaluation and bounded execution. A new document format needs a parser,
+source-authentication model and integration tests. New rule atoms require
+updated semantics, proofs and a new guest image. Existing invoice results do
+not automatically validate another domain.
 ---
 
 ## 13. The plan
@@ -536,7 +644,8 @@ A third application exists as a specification:
 
 1. Set up an x86 machine with Docker for the prover. Record the reproducible
    image identifier that it builds.
-2. Deploy a proof verifier. RISC Zero publishes no verifier for Arc.
+2. Check current verifier deployments and provenance. Deploy a reviewed verifier
+   if no suitable deployment is available.
 3. Deploy the escrow against that verifier and that image identifier.
 4. Fund the deployer wallet and the buyer wallet with testnet USDC. Arc also uses
    USDC to pay for gas.
@@ -556,10 +665,10 @@ The invoices are synthetic at this stage. The contracts and the proofs are real.
 
 ### Stage 3: the first real payments — later
 
-Two candidate applications lead. The first is infrastructure that an agent buys
-for itself, which starts with a virtual server. The second is a financial
-workflow such as trading. Both contain small, repeated and well-specified
-payments.
+The first proposed application is invoice payment for infrastructure that an
+agent buys, starting with a virtual server. Validate invoice ingestion, buyer
+approval, duplicate handling and operating cost with a real vendor before
+expanding to other payment domains.
 
 ---
 
@@ -573,8 +682,11 @@ payments.
   confidential, because a small policy space is guessable.
 - The exact EN 16931 rounding rules for the total check are not implemented. The
   current code uses straight sums and returns `Ask` on any mismatch.
-- Should the policy become immutable in the contract constructor? The current
-  escrow has no policy setter, but the two older prototypes still have one.
+- Each deployment must name and operate its invoice authority, including how
+  that authority handles corrections, reissues and duplicate business debts.
+  The protocol requires its signature but cannot establish its honesty.
+- What are the proof cost, memory requirement and settlement latency for the
+  current invoice guest, measured separately from earlier task guests?
 
 ---
 
@@ -588,7 +700,6 @@ payments.
 - OWASP XML External Entity Prevention Cheat Sheet.
   <https://cheatsheetseries.owasp.org/cheatsheets/XML_External_Entity_Prevention_Cheat_Sheet.html>
 - Arc testnet connection details. <https://docs.arc.io/arc/references/connect-to-arc>
-- ASD-STE100 Simplified Technical English. <https://www.asd-ste100.org/>
 
 Nothing in this document is legal advice. The measurements describe a prototype.
 They do not describe an audited production system.

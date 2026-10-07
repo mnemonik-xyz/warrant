@@ -178,7 +178,7 @@ sequenceDiagram
         Prover-->>Buyer: receipt (journal + proof), wrapped for EVM
         Buyer->>Chain: settle(seal, journal)
     end
-    Chain->>Chain: 14 journal checks or approval checks, obligation consumed
+    Chain->>Chain: 15-word journal checks or approval checks, obligation consumed
     Chain-->>Seller: USDC to the credential's payout address
     Note over Chain: partial deliveries repeat under the same order until the ceiling
     Note over Chain: after settleBy anyone closes, remainder returns to the buyer
@@ -203,11 +203,12 @@ stateDiagram-v2
 | Request R | Buyer agent | request ID, specs, quantities, budget, deadline | PO ID = R |
 | Vendor credential | Registry | tax ID hash, payout address, category, validity | Policy's registry key |
 | Quote Q | Seller agent | R, item codes, prices, total, delivery date, credential, signature | PO lines = Q's item codes |
-| Purchase order | Buyer's PO key | poId = R, vendor tax ID, ceiling, lines, validity | Order on chain by (policyHash, poId) |
+| Purchase order | Buyer's PO key | poId = R, vendor tax ID, ceiling, lines, validity | Order on chain by (customer, policyHash, poId) |
 | Order (on chain) | Buyer agent | policy hash, poId, recipient = credential address, ceiling, signer terms | Journal must match all |
 | Acceptance | Receiving side | obligation ID, document hash, recipient, amount | Invoice's obligation ID and hash |
+| Invoice-source attestation | Buyer-approved invoice authority | Exact document hash, customer, PO, scope, validity and signature | Mandatory before automatic authorization; does not establish delivery |
 | Invoice | Seller agent | number, seller tax ID, order reference = R, lines with Q's item codes, totals | Obligation ID = tax ID + number |
-| Journal | Checker | 14 words: policy, chain, escrow, token, recipient, amount, obligation, document, version, window, evidence, poId, ceiling | Verified by the escrow |
+| Journal | Checker | 15 words: policy, chain, escrow, token, recipient, amount, obligation, document, version, window (two words), evidence, poId, ceiling, customer | Verified by the escrow |
 
 Because the quote's item codes flow into the PO and then into the invoice, line
 matching in the checker is exact (`PoLine` evidence), and the lexicon path is
