@@ -1117,6 +1117,13 @@ Fault-injection tests for W2 to W4:
 10. an initiator outage past the reveal deadline: the initiator does not reveal and
     refunds leg A after `T_A`; the responder refunds leg B after `T_B`.
 
+### 13.4 Code status against version 0.3
+
+The code in `policy-execution` at commit `e9e9d31` (`swap-verified`, `swap-core`)
+implements version 0.2 of this specification. A comparison with version 0.3 is
+in progress. This section will list each version 0.3 requirement that the code
+does not implement yet, and [tasks.md](tasks.md) will track each one.
+
 ---
 
 ## 14. Open questions
