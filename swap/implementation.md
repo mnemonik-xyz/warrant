@@ -10,7 +10,7 @@ This document proposes the decisions of step W0, pending owner sign-off
 references like "spec 7.3" point to [spec.md](spec.md).
 
 Spec version 0.3 changes several rules. Spec section 13.4 lists each
-difference from the code with an id: D1 to D9 for defects, G1 to G24 for gaps.
+difference from the code with an id: D1 to D9 for defects, G1 to G25 for gaps.
 The sections below that version 0.3 changes have a note with these ids. Where
 this document and spec 13.4 differ, spec 13.4 gives the target.
 
@@ -45,7 +45,7 @@ Other choices that this document makes, all inside the spec's freedom:
   adapter's timelock must equal this value. Before the lock exists (accept and
   the initiator's lock), `T_A` counts from the block after the observed tip,
   the earliest confirmation. A relative time is not supported, because no
-  observation carries its BIP 68 base. The verified arithmetic handles absolute
+  observation carries its BIP 68 base (G25). The verified arithmetic handles absolute
   timelocks only (G2, mnemonik-xyz/policy-execution#9).
 - **Own Bitcoin coins** are Taproot key-path outputs, so the signer computes
   every BIP 341 sighash itself. PSBT version 0 only.

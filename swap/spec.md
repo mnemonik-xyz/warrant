@@ -1201,7 +1201,8 @@ mnemonik-xyz/policy-execution#9, merged as `89308bc`, fixes D3, D7, D8, D9 and G
 - **D9.** The ledger keeps the policy hash with the version.
 - **G2.** Every entry action denies a relative leg B timelock. `T_A` of a
   relative leg A comes from the observed confirmation of its lock, or from the
-  next block while no lock exists, never from the adapter value.
+  next block while no lock exists, never from the adapter value. This covers
+  relative block counts. A relative time on leg A stays unsupported (G25).
 
 **Defects.** These rows break a rule that version 0.2 also has. Fix them first.
 
@@ -1222,7 +1223,7 @@ mnemonik-xyz/policy-execution#9, merged as `89308bc`, fixes D3, D7, D8, D9 and G
 | Id | Spec | Code | Missing in the code | Severity |
 |---|---|---|---|---|
 | G1 | 7.3, S11, 8.1 | `swap-verified/src/lib.rs:758-822`, `lib.rs:930-945`, `lib.rs:1064-1082`; `profile.rs:63-67`; `checks.rs:256-266` | The clock model uses a fixed block interval. Version 0.3 needs a real-time bound for n blocks at a stated failure probability, the Bitcoin median-time-past lag and a sequencer window. S11 and its proof do not include `D_refund(B)`. A Bitcoin leg B can then pass S11 with a gap that is too short. | high, fixed in mnemonik-xyz/policy-execution#8 |
-| G2 | 3.2, S11, S13 | `checks.rs:246-254`, `authorize.rs:311-334`, `types.rs:85-87` | A relative timelock on leg B passes at accept. Only the responder's lock rejects it, after the initiator has locked leg A. `swap-core` does not compute the absolute leg A timelock from the observed confirmation. It uses the adapter value. | medium, fixed in mnemonik-xyz/policy-execution#9 |
+| G2 | 3.2, S11, S13 | `checks.rs:246-254`, `authorize.rs:311-334`, `types.rs:85-87` | A relative timelock on leg B passes at accept. Only the responder's lock rejects it, after the initiator has locked leg A. `swap-core` does not compute the absolute leg A timelock from the observed confirmation. It uses the adapter value. | medium, fixed in mnemonik-xyz/policy-execution#9 for relative block counts; relative seconds: G25 |
 | G3 | 8.2 refund leaf, 8.6 | `bitcoin.rs:599-602` | A refund input can have any `nSequence` other than `0xFFFFFFFF`. A value with bit 31 clear adds a BIP 68 relative delay. The refund of leg B can then come too late, and the initiator can claim leg B after it refunds leg A. Version 0.3 requires `0xFFFFFFFD`. | high, fixed in `33f8cdf` |
 | G4 | 3.2 `lock_id`, 8.2, S10 | `types.rs:38-63`, `bitcoin.rs:105-115`, `evm.rs:215-217`, `solana.rs:16`, `solana.rs:348-349` | Locks are keyed by `swap_id`, not by `lock_id`. The two legs of a same-chain swap use the same key. The Bitcoin claim leaf has no `<lock_id> OP_DROP` prefix. Key fields are `keys.receiver` and `keys.refund`, not `claim_key` and `refund_key`. | high |
 | G5 | 3.5, S8 | `types.rs:100-113`, `authorize.rs:62-77`, `lib.rs` | No `negotiation` module exists: no message bodies, `intent_id`, transcript rules 1 to 5 or receiver checks. The hashed terms contain `swap_id` and party names, and they do not contain `hashlock`, `payout_basis` or `valid_until`. `swap_id` is an input, not the hash of the ACCEPT `inner_signed` bytes. | high |
@@ -1245,6 +1246,7 @@ mnemonik-xyz/policy-execution#9, merged as `89308bc`, fixes D3, D7, D8, D9 and G
 | G22 | 4.2 Solana | `solana.rs:223-268`, `solana.rs:189-195`, `authorize.rs:349-369` | The decoder does not check compute bounds. (`83e7e57` adds the HTLC instruction account check.) It accepts any associated token account create. It does not bind the token program to the asset. It allows a durable nonce in every message, not only in the prepared refund. | medium |
 | G23 | 4.3, 9 E2 | `solana.rs:183-207` | No builder of the Ed25519 message `warrant.swap.v1/ed25519-ix` with the on-chain warrant digest. | low |
 | G24 | S9, S10, S26, S27 | `checks.rs:47-52`, `checks.rs:163-165`, `checks.rs:226-235` | Reason codes use version 0.2 numbers: `S4_HASHLOCK_REUSED` and `S8_FORBIDDEN_RISK_FLAG`. No `S26` code exists (`S27_RECEIVER` exists since mnemonik-xyz/policy-execution#8). | low |
+| G25 | 3.2, 7.3, 8.2 | At `89308bc`: `types.rs` `TimelockSpec::absolute`, `checks.rs` `timelock_form`, `bitcoin.rs` `refund_leaf` | A leg A timelock of kind `relative_seconds` is rejected at every action, so these terms cannot be used. No fact carries its BIP 68 base: the median time past of the block before the confirming block, in units of 512 seconds. The Bitcoin refund leaf and the refund `nSequence` check accept relative block counts only. | low |
 
 Until D1 to D9 are fixed, do not use the code with funds. Until the high gaps
 are closed, the code does not meet version 0.3.

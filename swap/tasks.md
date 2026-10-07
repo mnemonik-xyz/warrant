@@ -65,7 +65,7 @@ Result: 78 tests passed; 18 of 18 disabled checks caught; wasm32 build succeeds.
 
 ## W2.1 — spec version 0.3 gaps
 
-Spec section 13.4 describes each item. Fix D1 to D9 before G1 to G24, because
+Spec section 13.4 describes each item. Fix D1 to D9 before G1 to G25, because
 they break version 0.2 rules too. Each fix adds a test that fails without it.
 
 Defects:
@@ -98,7 +98,8 @@ Gaps:
       to S11 and its proof (mnemonik-xyz/policy-execution#8; the sequencer window is part of
       `max_lag_secs`).
 - [x] G2 Reject a relative leg B timelock at accept. Compute the absolute leg A
-      timelock from the observed confirmation (mnemonik-xyz/policy-execution#9).
+      timelock from the observed confirmation (mnemonik-xyz/policy-execution#9;
+      relative block counts only, relative seconds are G25).
 - [x] G3 No signed Bitcoin transaction waits: lock and claim final now; refund
       `nLockTime` from `T` up to the tip, no relative lock (policy-execution
       `33f8cdf`).
@@ -133,6 +134,10 @@ Gaps:
       (policy-execution `83e7e57`).
 - [ ] G23 E2 Ed25519 message builder.
 - [ ] G24 Reason codes for S9, S10 and S26 (S27 exists since mnemonik-xyz/policy-execution#8).
+- [ ] G25 Leg A timelock of kind `relative_seconds`: observe the BIP 68 time base
+      (the median time past of the block before the confirming block), use
+      512-second units, and accept the kind in the refund leaf and the refund
+      `nSequence` check. Until then, such terms are rejected.
 
 Done outside this list, from the review of policy-execution#7 (`83e7e57`): no
 warrant without a verified ACCEPT of the proposed terms; Bitcoin fee limits
