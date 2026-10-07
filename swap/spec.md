@@ -1093,9 +1093,10 @@ results.
 | `swap-verified` (`warrant-swap-verified`) | Swap evaluator, timeout arithmetic, Verus proofs | `vstd`, optional `serde` |
 | `swap-core` (`warrant-swap-core`) | Facts, checks, profiles, decoders, warrant payload | `swap-verified`, `serde`, `serde_json`, `sha2`, `sha3`, `blake3`, `k256`, `curve25519-dalek`, `bs58`, `rand_core`, `zeroize` |
 
-The swap crates are at commit `e9e9d31`, which the submodule pins.
-mnemonik-xyz/policy-execution#7 merges them into `main`. They change no invoice
-crate and no guest image id.
+The swap crates are on `policy-execution` `main`. mnemonik-xyz/policy-execution#7
+merged them as commit `2e19118`, which the submodule pins. That commit contains
+the review fixes `83e7e57` and `33f8cdf` of the pull request branch. The swap
+crates change no invoice crate and no guest image id.
 
 The evaluator is already separate from the zkVM code. `core` and `verified` do
 not depend on RISC Zero. A policy signer can use them without the zkVM.
@@ -1164,13 +1165,14 @@ differences from version 0.3. Each row has a task with the same id in
 `policy-execution` root and point to commit `e9e9d31`. Paths without a crate
 name are in `swap-core/src/`.
 
-A code review of mnemonik-xyz/policy-execution#7 led to commit `83e7e57`. It
+A code review of mnemonik-xyz/policy-execution#7 led to commit `83e7e57`, now
+part of `2e19118` on `main`. It
 fixes D2 and the HTLC account check of G22. It also adds three fixes that the
 tables do not list. No warrant is issued without a verified ACCEPT of the
 proposed terms (part of G5). A Bitcoin transaction pays at most the profile's
 worst-case fee. Solana lookup-table addresses come from chain facts.
 
-Commit `33f8cdf` fixes D1 and G3. For G3 it pins every Bitcoin timing field,
+Commit `33f8cdf`, also part of `2e19118`, fixes D1 and G3. For G3 it pins every Bitcoin timing field,
 not only the refund `nSequence`: a lock or a claim that has to wait is as unsafe
 as a late refund. It also requires an observed Bitcoin lock to carry its output
 script, and it denies an `Ask` that comes from an unknown price (section 5.4).

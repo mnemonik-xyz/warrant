@@ -474,13 +474,17 @@ exit action (G8). The warrant also gets `fee_ceiling`, `owner_approval`,
 ## 5. Results (2026-10-05, commit `e9e9d31`)
 
 Code: `policy-execution` commit `e9e9d31` on branch `ccr-7c731f40-t51t9k`,
-crates `swap-verified` and `swap-core`. mnemonik-xyz/policy-execution#7 merges
-the branch into `main`. A rerun on 2026-10-07 gave the same test counts.
+crates `swap-verified` and `swap-core`. mnemonik-xyz/policy-execution#7 merged
+the branch into `main` as commit `2e19118`. A rerun on 2026-10-07 gave the same test counts.
 Verus and the mutation scripts were not run again.
 
 Review fixes at commit `83e7e57` (2026-10-07): 85 `swap-core` tests passed (60
 unit, 25 pipeline); `check_mutations.py` caught 18 of 18 disabled checks; the
 `wasm32-unknown-unknown` build succeeds. `swap-verified` did not change.
+
+D1, G3 and the price rule at commit `33f8cdf` (2026-10-07): 90 `swap-core`
+tests passed (61 unit, 29 pipeline); `check_mutations.py` caught 18 of 18
+disabled checks; the `wasm32-unknown-unknown` build succeeds.
 
 | Item | Result |
 |---|---|
