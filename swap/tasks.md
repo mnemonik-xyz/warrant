@@ -79,8 +79,10 @@ Defects:
 - [ ] D3 Solana: check the escrow account discriminator in `ProgramPin`.
 - [ ] D4 Record every fact that the evaluator read, with provenance and the
       observed value.
-- [ ] D5 Remove the Bitcoin `min_block_secs > 0` rule (with G1).
-- [ ] D6 Subtract `D_margin` in `reveal_window`; run Verus again.
+- [x] D5 Remove the Bitcoin `min_block_secs > 0` rule (with G1;
+      mnemonik-xyz/policy-execution#8).
+- [x] D6 Subtract `D_margin` in `reveal_window`; run Verus again
+      (mnemonik-xyz/policy-execution#8).
 - [ ] D7 Put only fixed reason codes in `reasons`.
 - [ ] D8 S20: check the window against the verifier's real time with a skew
       allowance.
@@ -89,9 +91,10 @@ Defects:
 
 Gaps:
 
-- [ ] G1 Clock model with n-block bounds at a stated failure probability, the
+- [x] G1 Clock model with n-block bounds at a stated failure probability, the
       Bitcoin median-time-past lag and the sequencer window. Add `D_refund(B)`
-      to S11 and its proof.
+      to S11 and its proof (mnemonik-xyz/policy-execution#8; the sequencer window is part of
+      `max_lag_secs`).
 - [ ] G2 Reject a relative leg B timelock at accept. Compute the absolute leg A
       timelock from the observed confirmation.
 - [x] G3 No signed Bitcoin transaction waits: lock and claim final now; refund
@@ -113,7 +116,7 @@ Gaps:
 - [ ] G12 Bitcoin prevouts from chain facts, not from the PSBT.
 - [ ] G13 EVM `approve(spender, 0)` reset and EIP-2612 permit.
 - [ ] G14 S10 set of consumed counterparty locks.
-- [ ] G15 S27 receiver checks before lock and before reveal.
+- [x] G15 S27 receiver checks before lock and before reveal (mnemonik-xyz/policy-execution#8).
 - [ ] G16 S15 earmarks for open swaps; L1 data fee, Solana rent and fee-payer
       minimum in the worst-case fees.
 - [ ] G17 `period_notional_at_most` as `[period, ref_ccy, amount]`.
@@ -127,7 +130,7 @@ Gaps:
       token account creates, token program, nonce scope. HTLC accounts: done
       (policy-execution `83e7e57`).
 - [ ] G23 E2 Ed25519 message builder.
-- [ ] G24 Reason codes for S9, S10, S26 and S27.
+- [ ] G24 Reason codes for S9, S10 and S26 (S27 exists since mnemonik-xyz/policy-execution#8).
 
 Done outside this list, from the review of policy-execution#7 (`83e7e57`): no
 warrant without a verified ACCEPT of the proposed terms; Bitcoin fee limits
