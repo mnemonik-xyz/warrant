@@ -25,6 +25,7 @@ Each prototype documents its own setup, tests, diagrams and limitations.
 - [Real invoices: specification and collection guide](real-invoices/spec.md) ([по-русски](real-invoices/spec.ru.md))
 - [Use case: automated hardware purchase between agents](hardware-purchase/spec.md)
 - [Solver bounty: proof-based acceptance and result delivery](solver-bounty/README.md)
+- [Warrant for swaps: policy-attested cross-chain settlement](swap/spec.md) (chain-agnostic HTLC swap authorization, safety checks and chain primitives; [implementation specification](swap/implementation.md), [tasks](swap/tasks.md))
 
 ## Restoration on 2026-09-22
 
