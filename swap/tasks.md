@@ -76,18 +76,20 @@ Defects:
       observed lock must also carry its output script).
 - [x] D2 Notional is unknown unless the price of each leg is known
       (policy-execution `83e7e57`).
-- [ ] D3 Solana: check the escrow account discriminator in `ProgramPin`.
+- [x] D3 Solana: check the escrow account discriminator in `ProgramPin`
+      (mnemonik-xyz/policy-execution#9).
 - [ ] D4 Record every fact that the evaluator read, with provenance and the
       observed value.
 - [x] D5 Remove the Bitcoin `min_block_secs > 0` rule (with G1;
       mnemonik-xyz/policy-execution#8).
 - [x] D6 Subtract `D_margin` in `reveal_window`; run Verus again
       (mnemonik-xyz/policy-execution#8).
-- [ ] D7 Put only fixed reason codes in `reasons`.
-- [ ] D8 S20: check the window against the verifier's real time with a skew
-      allowance.
-- [ ] D9 S22: keep the policy hash with the version; reject a different hash
-      at the same version.
+- [x] D7 Put only fixed reason codes in `reasons`
+      (mnemonik-xyz/policy-execution#9).
+- [x] D8 S20: check the window against the verifier's real time with a skew
+      allowance (mnemonik-xyz/policy-execution#9).
+- [x] D9 S22: keep the policy hash with the version; reject a different hash
+      at the same version (mnemonik-xyz/policy-execution#9).
 
 Gaps:
 
@@ -95,8 +97,8 @@ Gaps:
       Bitcoin median-time-past lag and the sequencer window. Add `D_refund(B)`
       to S11 and its proof (mnemonik-xyz/policy-execution#8; the sequencer window is part of
       `max_lag_secs`).
-- [ ] G2 Reject a relative leg B timelock at accept. Compute the absolute leg A
-      timelock from the observed confirmation.
+- [x] G2 Reject a relative leg B timelock at accept. Compute the absolute leg A
+      timelock from the observed confirmation (mnemonik-xyz/policy-execution#9).
 - [x] G3 No signed Bitcoin transaction waits: lock and claim final now; refund
       `nLockTime` from `T` up to the tip, no relative lock (policy-execution
       `33f8cdf`).

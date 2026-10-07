@@ -1072,7 +1072,8 @@ Status on 2026-10-07: the evaluator, the timeout arithmetic and their proofs
 exist (`swap-verified`), and so do the safety checks S1 to S25 and S27, the
 chain profiles and the transaction decoders, with their tests (`swap-core`).
 They implement version 0.2 of this specification, plus the n-block clock model,
-`D_refund(B)` in S11 and S27 from mnemonik-xyz/policy-execution#8. Section 13.4
+`D_refund(B)` in S11 and S27 from mnemonik-xyz/policy-execution#8.
+mnemonik-xyz/policy-execution#9 (open) fixes D3, D7, D8, D9 and G2. Section 13.4
 lists the later requirements that they do not implement yet. The proof covers
 the evaluator and the arithmetic only. See [implementation.md](implementation.md) section 5 for the
 results.
@@ -1186,26 +1187,40 @@ verified, 0 errors; 35 of 35 mutations rejected). S27 runs before lock and
 before reveal; on Solana it also checks the mint pause and, once the paying lock
 exists, the escrow token account.
 
+mnemonik-xyz/policy-execution#9 (open) fixes D3, D7, D8, D9 and G2:
+
+- **D3.** Solana S7 reads the escrow account. An observed lock needs a
+  program-owned escrow whose data starts with the reference discriminator.
+  Before the own lock, the address holds no account or only lamports.
+- **D7.** `reasons` holds fixed codes only. When S13 wraps another check, the
+  record also names that check. Details stay in a local diagnostic.
+- **D8.** S20 compares the window with the verifier's real time and a stated
+  skew of at most 60 seconds.
+- **D9.** The ledger keeps the policy hash with the version.
+- **G2.** Every entry action denies a relative leg B timelock. `T_A` of a
+  relative leg A comes from the observed confirmation of its lock, or from the
+  next block while no lock exists, never from the adapter value.
+
 **Defects.** These rows break a rule that version 0.2 also has. Fix them first.
 
 | Id | Spec | Code | Defect | Severity |
 |---|---|---|---|---|
 | D1 | S5, S6, 8.2 | `checks.rs:169-178`, `tx.rs:26-34`, `bitcoin.rs:190-196` | S5 and S6 compare only CAIP-10 accounts. On Bitcoin, the claim key and the refund key decide who can spend. No check compares them with the own keys. The initiator can put its own key in `keys.receiver` of leg A and still name the responder's address. The responder then locks leg B and loses both legs. | high, fixed in `33f8cdf` |
 | D2 | 6.1, S14 | `authorize.rs:289-292` | When the price of one leg is unknown, the notional takes the value of the other leg. The notional must be unknown. `NotionalAtMost` can then be true without a sure value, and S14 can choose a weaker finality band. | medium, fixed in `83e7e57` |
-| D3 | 8.4 Solana | `solana.rs:362-388` | `ProgramPin::matches` does not check the escrow account discriminator. S7 accepts any program-owned account at the expected address. | medium |
+| D3 | 8.4 Solana | `solana.rs:362-388` | `ProgramPin::matches` does not check the escrow account discriminator. S7 accepts any program-owned account at the expected address. | medium, fixed in mnemonik-xyz/policy-execution#9 |
 | D4 | 4.1, 5 | `authorize.rs:126-133`, `authorize.rs:471-494` | The warrant does not record every fact that the evaluator read. `give_chain`, `take_chain` and the price reports are missing. Provenance is `None` for signed and chain facts. `resolve()` records `true`, not the observed value. A verifier cannot run the decision again from the warrant. | medium |
 | D5 | 7.3 | `profile.rs:93-96` | A Bitcoin profile must have `min_block_secs > 0`. Block intervals are random, so a positive floor is not a sure minimum. The earliest real time of a Bitcoin height lock can be too late. G1 removes this rule. | medium, fixed in mnemonik-xyz/policy-execution#8 |
 | D6 | S12, 6.2 | `swap-verified/src/lib.rs:918-928` | `reveal_window` does not subtract the policy margin `D_margin`. `RevealWindowAtLeast` overstates the time before the reveal deadline. | low, fixed in mnemonik-xyz/policy-execution#8 |
-| D7 | 4.1 `reasons` | `authorize.rs:163`, `authorize.rs:170`, `authorize.rs:308` | Decision records store `code: detail` strings. A detail can contain text from the proposed terms, for example the contract name. `reasons` must hold fixed codes only. | low |
-| D8 | S20 | `warrant.rs:158`, `warrant.rs:192` | `check_binding` compares the window with a time that the comment calls chain time, and it has no skew allowance. S20 uses the verifier's real time and a stated skew. | low |
-| D9 | S22 | `ledger.rs:21-22`, `ledger.rs:81-86`, `checks.rs:326-330` | The ledger keeps the policy version but not the policy hash. A different policy with the same version passes. | low |
+| D7 | 4.1 `reasons` | `authorize.rs:163`, `authorize.rs:170`, `authorize.rs:308` | Decision records store `code: detail` strings. A detail can contain text from the proposed terms, for example the contract name. `reasons` must hold fixed codes only. | low, fixed in mnemonik-xyz/policy-execution#9 |
+| D8 | S20 | `warrant.rs:158`, `warrant.rs:192` | `check_binding` compares the window with a time that the comment calls chain time, and it has no skew allowance. S20 uses the verifier's real time and a stated skew. | low, fixed in mnemonik-xyz/policy-execution#9 |
+| D9 | S22 | `ledger.rs:21-22`, `ledger.rs:81-86`, `checks.rs:326-330` | The ledger keeps the policy version but not the policy hash. A different policy with the same version passes. | low, fixed in mnemonik-xyz/policy-execution#9 |
 
 **Gaps.** These rows are new in version 0.3. The code does not implement them yet.
 
 | Id | Spec | Code | Missing in the code | Severity |
 |---|---|---|---|---|
 | G1 | 7.3, S11, 8.1 | `swap-verified/src/lib.rs:758-822`, `lib.rs:930-945`, `lib.rs:1064-1082`; `profile.rs:63-67`; `checks.rs:256-266` | The clock model uses a fixed block interval. Version 0.3 needs a real-time bound for n blocks at a stated failure probability, the Bitcoin median-time-past lag and a sequencer window. S11 and its proof do not include `D_refund(B)`. A Bitcoin leg B can then pass S11 with a gap that is too short. | high, fixed in mnemonik-xyz/policy-execution#8 |
-| G2 | 3.2, S11, S13 | `checks.rs:246-254`, `authorize.rs:311-334`, `types.rs:85-87` | A relative timelock on leg B passes at accept. Only the responder's lock rejects it, after the initiator has locked leg A. `swap-core` does not compute the absolute leg A timelock from the observed confirmation. It uses the adapter value. | medium |
+| G2 | 3.2, S11, S13 | `checks.rs:246-254`, `authorize.rs:311-334`, `types.rs:85-87` | A relative timelock on leg B passes at accept. Only the responder's lock rejects it, after the initiator has locked leg A. `swap-core` does not compute the absolute leg A timelock from the observed confirmation. It uses the adapter value. | medium, fixed in mnemonik-xyz/policy-execution#9 |
 | G3 | 8.2 refund leaf, 8.6 | `bitcoin.rs:599-602` | A refund input can have any `nSequence` other than `0xFFFFFFFF`. A value with bit 31 clear adds a BIP 68 relative delay. The refund of leg B can then come too late, and the initiator can claim leg B after it refunds leg A. Version 0.3 requires `0xFFFFFFFD`. | high, fixed in `33f8cdf` |
 | G4 | 3.2 `lock_id`, 8.2, S10 | `types.rs:38-63`, `bitcoin.rs:105-115`, `evm.rs:215-217`, `solana.rs:16`, `solana.rs:348-349` | Locks are keyed by `swap_id`, not by `lock_id`. The two legs of a same-chain swap use the same key. The Bitcoin claim leaf has no `<lock_id> OP_DROP` prefix. Key fields are `keys.receiver` and `keys.refund`, not `claim_key` and `refund_key`. | high |
 | G5 | 3.5, S8 | `types.rs:100-113`, `authorize.rs:62-77`, `lib.rs` | No `negotiation` module exists: no message bodies, `intent_id`, transcript rules 1 to 5 or receiver checks. The hashed terms contain `swap_id` and party names, and they do not contain `hashlock`, `payout_basis` or `valid_until`. `swap_id` is an input, not the hash of the ACCEPT `inner_signed` bytes. | high |
