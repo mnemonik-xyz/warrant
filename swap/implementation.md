@@ -172,13 +172,14 @@ unknown state for each flag, and a present forbidden flag gives `false` (G18).
 
 ### 3.4 Timeout arithmetic
 
-This section implements spec version 0.2. Version 0.3 replaces the fixed block
-interval with an n-block bound at a stated failure probability and adds
-`D_refund(B)` to S11 (G1, D5). `reveal_window` must also subtract `D_margin`
-(D6). These changes are planned (spec 13.4).
+This section describes the clock model of mnemonik-xyz/policy-execution#8, which implements spec
+version 0.3 section 7.3 (G1, D5, D6). Blocks arrive at random, so no fixed block
+interval exists. The profile bounds the real time of the next `n` blocks from
+now at its stated failure probability.
 
 ```text
-ClockBounds { min_block_secs, max_block_secs, max_lead_secs, max_lag_secs }
+ClockBounds { fast_block_secs, fast_slack_secs, slow_block_secs, slow_slack_secs,
+              max_lead_secs, max_lag_secs, time_settle_blocks }
 Timelock    = Height(u64) | Time(u64)        absolute; the first height or chain time
                                               at which the refund is valid
 ChainNow    { tip_height, now_real }
@@ -196,11 +197,19 @@ Specification functions on integers:
 ```text
 pending(Height h)       = h > tip_height
 pending(Time t)         = t > now_real + max_lead_secs
-earliest_real(Height h) = now_real + (h − tip_height − 1) · min_block_secs
-latest_real(Height h)   = now_real + (h − tip_height) · max_block_secs
+blocks_lo(n)            = max(0, n · fast_block_secs − fast_slack_secs)
+blocks_hi(n)            = n · slow_block_secs + slow_slack_secs
+settle                  = blocks_hi(time_settle_blocks), or 0 for 0 blocks
+earliest_real(Height h) = now_real + blocks_lo(h − tip_height)
+latest_real(Height h)   = now_real + blocks_hi(h − tip_height)
 earliest_real(Time t)   = t − max_lead_secs
-latest_real(Time t)     = t + max_lag_secs
+latest_real(Time t)     = t + max_lag_secs + settle
 ```
+
+`time_settle_blocks` is the number of new blocks that a time lock needs after
+the chain clock passes `T`: six on Bitcoin, where the median time past of 11
+blocks decides (BIP 113). On an L2, `max_lag_secs` includes the sequencer
+window.
 
 `pending` means that the refund is certainly not valid yet. The bounds are
 defined only for a pending timelock. A timelock that is not pending fails S11
@@ -210,22 +219,27 @@ internally, so no intermediate value overflows.
 | Function | Spec check | Result |
 |---|---|---|
 | `timeout_gap(T_A, now_A, bounds_A, T_B, now_B, bounds_B)` | Fact `timeout_gap` | `earliest_real(T_A) − latest_real(T_B)`, 0 if negative |
-| `s11_holds(…, d_observe, d_confirm, d_margin)` | S11 | gap ≥ `d_observe + d_confirm + d_margin` |
+| `s11_holds(…, d_refund, d_observe, d_confirm, d_margin)` | S11 | gap ≥ `d_refund + d_observe + d_confirm + d_margin` |
 | `s12_holds(T_B, now_B, bounds_B, d_confirm, d_margin)` | S12 | `now_real + d_confirm + d_margin ≤ earliest_real(T_B)` |
-| `reveal_window(…)` | Fact `reveal_window` | `earliest_real(T_B) − now_real − d_confirm`, 0 if negative |
+| `reveal_window(…, d_confirm, d_margin)` | Fact `reveal_window` | `earliest_real(T_B) − now_real − d_confirm − d_margin`, 0 if negative |
+
+`d_refund` is `D_refund(B)` from the profile of leg B: 0 only when its lock
+rejects a claim after `T` (`claim_closes_at_timelock`, never on Bitcoin).
 
 Theorems, over a model of the chain:
 
-- **Height model.** For a pending height timelock, future block `k ≥ 1` has real time `b(k)` with
-  `0 ≤ b(1) − now_real ≤ max_block_secs` and
-  `min_block_secs ≤ b(k+1) − b(k) ≤ max_block_secs`. Then the block that makes
-  the refund valid has a time in `[earliest_real, latest_real]`.
+- **Height model.** The real time `b(n)` of the n-th block after the tip
+  satisfies `now_real + blocks_lo(n) ≤ b(n) ≤ now_real + blocks_hi(n)` for every
+  `n ≥ 1`, at the profile's failure probability. Then the block that makes the
+  refund valid has a time in `[earliest_real, latest_real]`.
 - **Time model.** The chain clock `c(r)` at real time `r` satisfies
-  `r − max_lag_secs ≤ c(r) ≤ r + max_lead_secs`. Then `c(r) ≥ t` implies
-  `r ≥ earliest_real(Time t)`, and `r ≥ latest_real(Time t)` implies `c(r) ≥ t`.
+  `r − max_lag_secs − settle ≤ c(r) ≤ r + max_lead_secs`. Then `c(r) ≥ t`
+  implies `r ≥ earliest_real(Time t)`, and `r ≥ latest_real(Time t)` implies
+  `c(r) ≥ t`.
 - **S11 soundness.** If `s11_holds` and both models hold, the real moment at
-  which leg A becomes refundable is at least `d_observe + d_confirm + d_margin`
-  after the real moment at which leg B becomes refundable.
+  which leg A becomes refundable is at least
+  `d_refund + d_observe + d_confirm + d_margin` after the real moment at which
+  leg B becomes refundable.
 - **S12 soundness.** If `s12_holds` and the model holds, leg B is not refundable
   before `now_real + d_confirm + d_margin`.
 
@@ -251,7 +265,7 @@ swapped.
 | `jcs` | RFC 8785 canonical JSON for the values that warrants use |
 | `dsl` | JSON mini-DSL → `SwapRule`; `SwapPolicy`; `validate_policy` |
 | `facts` | Observations with provenance; quorum; oracle; fact builder → `SwapFacts3` |
-| `checks` | Obligatory checks S1 to S25 of spec version 0.2 with fixed reason codes. The Bitcoin decoder enforces S26. S27 is planned (G15). |
+| `checks` | Obligatory checks S1 to S25 of spec version 0.2 with fixed reason codes. The Bitcoin decoder enforces S26. S27 is in mnemonik-xyz/policy-execution#8 (G15). |
 | `profile` | `ChainProfile` parameters; Bitcoin, EVM and Solana profiles |
 | `tx` | Transaction decoders and intent matching (S24) |
 | `warrant` | `SwapWarrant`, `DecisionRecord`, `TxBinding`, payload bytes, hash chain |
@@ -485,6 +499,13 @@ unit, 25 pipeline); `check_mutations.py` caught 18 of 18 disabled checks; the
 D1, G3 and the price rule at commit `33f8cdf` (2026-10-07): 90 `swap-core`
 tests passed (61 unit, 29 pipeline); `check_mutations.py` caught 18 of 18
 disabled checks; the `wasm32-unknown-unknown` build succeeds.
+
+n-block clock model, `D_refund(B)` and S27 in mnemonik-xyz/policy-execution#8
+(commit `e432292`, 2026-10-07): Verus 52 verified, 0 errors, and 35 of 35
+mutations rejected; 94 `swap-core` tests passed (64 unit, 30 pipeline);
+`check_mutations.py` caught 19 of 19 disabled checks; the
+`wasm32-unknown-unknown` build succeeds. The table below gives the first results
+at `e9e9d31`.
 
 | Item | Result |
 |---|---|

@@ -659,7 +659,7 @@ cannot verify SHA-256 with a length check in its lock is not supported.
 | S8 | The observed amount and asset equal the terms. The signer reads the decimals from the chain (S9) and uses them only for notional and price. For a token with a transfer fee, the signer reads the fee configuration on chain, computes the gross debit that delivers the agreed net amount, and checks the net amount in the lock. The terms state whether the claim payout is gross or net of a second fee. | Short payment |
 | S9 | The asset identity and its risk flags come from the chain, not from the counterparty. An asset with the `confidential_amount` or `non_transferable` flag (section 8.5) fails this check. | A fake token with the same symbol; an amount that the signer cannot verify; a claim that cannot succeed |
 | S10 | The lock binds `lock_id` where the chain allows it, and the signer keeps a consumed set of swap ids. Each party also keeps a durable consumed set of counterparty lock identities and hashlocks. A lock identity is the Bitcoin outpoint, the EVM contract and escrow key, or the Solana escrow address. The party rejects a counterparty lock or an `H` that already backs another open or closed swap. | Replay of one lock or one warrant against a second swap; one counterparty lock used as the backing lock of two swaps |
-| S27 | Before `lock`, each party confirms that its own receiver on the other leg can receive the asset now. EVM: the token blocks neither the receiver nor the HTLC contract that holds the counterparty lock (for example USDC `isBlacklisted`), and the token is not paused. Solana: the receiver token account exists and is initialized. It does not require incoming transfer memos (Token-2022 `MemoTransfer`); the signer checks the `refund_to` token account in the same way before `lock`. It is not frozen. It has the leg mint and the expected owner, and the pinned token program owns it. For a Token-2022 mint whose default account state is frozen, the account must already exist and be thawed; the claim must not create it. The initiator repeats this check before `reveal`. | The counterparty claims with `s`, but the own claim fails because the receiver is blocklisted, frozen or created frozen |
+| S27 | Before `lock`, each party confirms that its own receiver on the other leg, and its own `refund_to` on its own leg, can receive the asset now. EVM: the token blocks neither the payee nor the HTLC contract that pays it (for example USDC `isBlacklisted`), and the token is not paused. Solana: the payee's associated token account for the leg mint exists and is initialized. It does not require incoming transfer memos (Token-2022 `MemoTransfer`). It is not frozen. It has the leg mint and the expected owner, and SPL Token or Token-2022 owns it. The mint is not paused (Token-2022 `Pausable`). Once the lock that pays the payee exists, its escrow token account is not frozen. For a Token-2022 mint whose default account state is frozen, the account must already exist and be thawed; the claim must not create it. The initiator repeats this check before `reveal`. | The counterparty claims with `s`, but the own claim fails because the receiver is blocklisted, frozen or created frozen |
 
 ### 7.3 Timelocks
 
@@ -1072,7 +1072,8 @@ Status on 2026-10-07: the evaluator, the timeout arithmetic and their proofs
 exist (`swap-verified`), and so do the safety checks S1 to S25, the chain
 profiles and the transaction decoders, with their tests (`swap-core`). They
 implement version 0.2 of this specification; section 13.4 lists the later
-requirements that they do not implement yet. The proof covers the evaluator and
+requirements that they do not implement yet. mnemonik-xyz/policy-execution#8 adds the n-block clock
+model, `D_refund(B)` in S11 and S27. The proof covers the evaluator and
 the arithmetic only. See [implementation.md](implementation.md) section 5 for the
 results.
 
@@ -1115,7 +1116,7 @@ Do not add swap atoms to the existing `Rule`. Add three crates:
 | Crate | Contents | Depends on | Does not depend on |
 |---|---|---|---|
 | `swap-verified` | `SwapRule`, `SwapFacts3`, `evaluate3`, timeout arithmetic, Verus proofs | `vstd`, optional `serde` | `k256`, RISC Zero, Mnemonik |
-| `swap-core` | Chain profile interface, fact builder, pure check functions for S1 to S3, S5 to S15, S18 and S20 to S24 over facts and state that the signer supplies, input checks for S4, S16, S17 and S19 over runtime state that the signer supplies, warrant payload (JCS), own decoders for PSBT, EIP-1559 and Solana messages. Planned (13.4): negotiation message types, intent and transcript rules (section 3.5), S26 as its own check (S26 is enforced inside the Bitcoin decoder today) and S27. | `swap-verified`, `sha2`, `sha3`, `blake3`, `k256`, `curve25519-dalek`, `bs58` | RISC Zero, Mnemonik, network clients |
+| `swap-core` | Chain profile interface, fact builder, pure check functions for S1 to S3, S5 to S15, S18 and S20 to S24 over facts and state that the signer supplies, input checks for S4, S16, S17 and S19 over runtime state that the signer supplies, warrant payload (JCS), own decoders for PSBT, EIP-1559 and Solana messages. Planned (13.4): negotiation message types, intent and transcript rules (section 3.5) and S26 as its own check (S26 is enforced inside the Bitcoin decoder today). S27 is in mnemonik-xyz/policy-execution#8. | `swap-verified`, `sha2`, `sha3`, `blake3`, `k256`, `curve25519-dalek`, `bs58` | RISC Zero, Mnemonik, network clients |
 | `swap-signer` | The policy signer binary: keys, watchers, ledger, RPC and node clients, Ask queue, sealing and opening negotiation messages, the receiver checks of section 3.5 with a durable nonce store, and anchoring through `mnemonic-core`; operational duties S4, S16, S17, S19 and S25; durable state for S10, S21 and S22 | `swap-core`, `mnemonic-core` (COSE, sealed A2A, anchoring), KMS adapters | RISC Zero |
 
 Rules for the layout:
@@ -1177,6 +1178,13 @@ not only the refund `nSequence`: a lock or a claim that has to wait is as unsafe
 as a late refund. It also requires an observed Bitcoin lock to carry its output
 script, and it denies an `Ask` that comes from an unknown price (section 5.4).
 
+mnemonik-xyz/policy-execution#8 (open) fixes D5, D6, G1 and G15. The verified clock model bounds
+the real time of `n` blocks at a stated failure probability, adds the settle
+blocks of a time lock and adds `D_refund(B)` to S11. Verus verifies it (52
+verified, 0 errors; 35 of 35 mutations rejected). S27 runs before lock and
+before reveal; on Solana it also checks the mint pause and, once the paying lock
+exists, the escrow token account.
+
 **Defects.** These rows break a rule that version 0.2 also has. Fix them first.
 
 | Id | Spec | Code | Defect | Severity |
@@ -1185,8 +1193,8 @@ script, and it denies an `Ask` that comes from an unknown price (section 5.4).
 | D2 | 6.1, S14 | `authorize.rs:289-292` | When the price of one leg is unknown, the notional takes the value of the other leg. The notional must be unknown. `NotionalAtMost` can then be true without a sure value, and S14 can choose a weaker finality band. | medium, fixed in `83e7e57` |
 | D3 | 8.4 Solana | `solana.rs:362-388` | `ProgramPin::matches` does not check the escrow account discriminator. S7 accepts any program-owned account at the expected address. | medium |
 | D4 | 4.1, 5 | `authorize.rs:126-133`, `authorize.rs:471-494` | The warrant does not record every fact that the evaluator read. `give_chain`, `take_chain` and the price reports are missing. Provenance is `None` for signed and chain facts. `resolve()` records `true`, not the observed value. A verifier cannot run the decision again from the warrant. | medium |
-| D5 | 7.3 | `profile.rs:93-96` | A Bitcoin profile must have `min_block_secs > 0`. Block intervals are random, so a positive floor is not a sure minimum. The earliest real time of a Bitcoin height lock can be too late. G1 removes this rule. | medium |
-| D6 | S12, 6.2 | `swap-verified/src/lib.rs:918-928` | `reveal_window` does not subtract the policy margin `D_margin`. `RevealWindowAtLeast` overstates the time before the reveal deadline. | low |
+| D5 | 7.3 | `profile.rs:93-96` | A Bitcoin profile must have `min_block_secs > 0`. Block intervals are random, so a positive floor is not a sure minimum. The earliest real time of a Bitcoin height lock can be too late. G1 removes this rule. | medium, fixed in mnemonik-xyz/policy-execution#8 |
+| D6 | S12, 6.2 | `swap-verified/src/lib.rs:918-928` | `reveal_window` does not subtract the policy margin `D_margin`. `RevealWindowAtLeast` overstates the time before the reveal deadline. | low, fixed in mnemonik-xyz/policy-execution#8 |
 | D7 | 4.1 `reasons` | `authorize.rs:163`, `authorize.rs:170`, `authorize.rs:308` | Decision records store `code: detail` strings. A detail can contain text from the proposed terms, for example the contract name. `reasons` must hold fixed codes only. | low |
 | D8 | S20 | `warrant.rs:158`, `warrant.rs:192` | `check_binding` compares the window with a time that the comment calls chain time, and it has no skew allowance. S20 uses the verifier's real time and a stated skew. | low |
 | D9 | S22 | `ledger.rs:21-22`, `ledger.rs:81-86`, `checks.rs:326-330` | The ledger keeps the policy version but not the policy hash. A different policy with the same version passes. | low |
@@ -1195,7 +1203,7 @@ script, and it denies an `Ask` that comes from an unknown price (section 5.4).
 
 | Id | Spec | Code | Missing in the code | Severity |
 |---|---|---|---|---|
-| G1 | 7.3, S11, 8.1 | `swap-verified/src/lib.rs:758-822`, `lib.rs:930-945`, `lib.rs:1064-1082`; `profile.rs:63-67`; `checks.rs:256-266` | The clock model uses a fixed block interval. Version 0.3 needs a real-time bound for n blocks at a stated failure probability, the Bitcoin median-time-past lag and a sequencer window. S11 and its proof do not include `D_refund(B)`. A Bitcoin leg B can then pass S11 with a gap that is too short. | high |
+| G1 | 7.3, S11, 8.1 | `swap-verified/src/lib.rs:758-822`, `lib.rs:930-945`, `lib.rs:1064-1082`; `profile.rs:63-67`; `checks.rs:256-266` | The clock model uses a fixed block interval. Version 0.3 needs a real-time bound for n blocks at a stated failure probability, the Bitcoin median-time-past lag and a sequencer window. S11 and its proof do not include `D_refund(B)`. A Bitcoin leg B can then pass S11 with a gap that is too short. | high, fixed in mnemonik-xyz/policy-execution#8 |
 | G2 | 3.2, S11, S13 | `checks.rs:246-254`, `authorize.rs:311-334`, `types.rs:85-87` | A relative timelock on leg B passes at accept. Only the responder's lock rejects it, after the initiator has locked leg A. `swap-core` does not compute the absolute leg A timelock from the observed confirmation. It uses the adapter value. | medium |
 | G3 | 8.2 refund leaf, 8.6 | `bitcoin.rs:599-602` | A refund input can have any `nSequence` other than `0xFFFFFFFF`. A value with bit 31 clear adds a BIP 68 relative delay. The refund of leg B can then come too late, and the initiator can claim leg B after it refunds leg A. Version 0.3 requires `0xFFFFFFFD`. | high, fixed in `33f8cdf` |
 | G4 | 3.2 `lock_id`, 8.2, S10 | `types.rs:38-63`, `bitcoin.rs:105-115`, `evm.rs:215-217`, `solana.rs:16`, `solana.rs:348-349` | Locks are keyed by `swap_id`, not by `lock_id`. The two legs of a same-chain swap use the same key. The Bitcoin claim leaf has no `<lock_id> OP_DROP` prefix. Key fields are `keys.receiver` and `keys.refund`, not `claim_key` and `refund_key`. | high |
@@ -1209,7 +1217,7 @@ script, and it denies an `Ask` that comes from an unknown price (section 5.4).
 | G12 | 8.7 Bitcoin | `bitcoin.rs:450-454`, `bitcoin.rs:535-540`, `bitcoin.rs:589-591` | Sighashes and the own-coin test use the PSBT `witness_utxo` values from the agent, not prevouts from chain facts. | medium |
 | G13 | 4.2 EVM, 8.7 EVM | `tx.rs:98-121`, `warrant.rs:54-57` | A token lock must be exactly `approve` then `lock`. No `approve(spender, 0)` reset and no EIP-2612 permit exist. `TxBinding::Evm` has no permit digest. | low |
 | G14 | S10 | `ledger.rs:17-28`, `authorize.rs:225-238` | The ledger has no set of consumed counterparty locks. One counterparty lock can back two swaps. | medium |
-| G15 | S27 | `checks.rs:43-71`, `authorize.rs:319-373` | S27 is not implemented: no blocklist, pause or token-account facts, no check before lock or reveal. | high |
+| G15 | S27 | `checks.rs:43-71`, `authorize.rs:319-373` | S27 is not implemented: no blocklist, pause or token-account facts, no check before lock or reveal. | high, fixed in mnemonik-xyz/policy-execution#8 |
 | G16 | S15 | `checks.rs:291-303`, `profile.rs:48-55` | Reserves are checked for one swap only, without earmarks for open swaps. Worst-case fees leave out the L1 data fee of an L2, Solana rent and the fee-payer minimum. | medium |
 | G17 | 6.2, 6.3 | `dsl.rs:218-225`, `swap-verified/src/lib.rs:35-36` | `period_notional_at_most` takes `[period, amount]`. The DSL rejects the three-element form and the example policy of section 6.3. | high |
 | G18 | 8.5, 6.2 | `swap-verified/src/lib.rs:47`, `lib.rs:373-376`, `types.rs:201-227`, `checks.rs:99-110` | A risk flag cannot be unknown on its own. `ui_multiplier` is missing. No EVM reader of the reviewed list exists for a proxy and its implementation. | high |
@@ -1218,7 +1226,7 @@ script, and it denies an `Ask` that comes from an unknown price (section 5.4).
 | G21 | 8.4 Solana | `solana.rs:352-360`, `solana.rs:378-382` | No loader owner, ProgramData address or code hash check. No check of the escrow token account. A program under another loader passes. | medium |
 | G22 | 4.2 Solana | `solana.rs:223-268`, `solana.rs:189-195`, `authorize.rs:349-369` | The decoder does not check compute bounds. (`83e7e57` adds the HTLC instruction account check.) It accepts any associated token account create. It does not bind the token program to the asset. It allows a durable nonce in every message, not only in the prepared refund. | medium |
 | G23 | 4.3, 9 E2 | `solana.rs:183-207` | No builder of the Ed25519 message `warrant.swap.v1/ed25519-ix` with the on-chain warrant digest. | low |
-| G24 | S9, S10, S26, S27 | `checks.rs:47-52`, `checks.rs:163-165`, `checks.rs:226-235` | Reason codes use version 0.2 numbers: `S4_HASHLOCK_REUSED` and `S8_FORBIDDEN_RISK_FLAG`. No `S26` or `S27` code exists. | low |
+| G24 | S9, S10, S26, S27 | `checks.rs:47-52`, `checks.rs:163-165`, `checks.rs:226-235` | Reason codes use version 0.2 numbers: `S4_HASHLOCK_REUSED` and `S8_FORBIDDEN_RISK_FLAG`. No `S26` code exists (`S27_RECEIVER` exists since mnemonik-xyz/policy-execution#8). | low |
 
 Until D1 to D9 are fixed, do not use the code with funds. Until the high gaps
 are closed, the code does not meet version 0.3.
