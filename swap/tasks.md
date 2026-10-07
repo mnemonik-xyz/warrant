@@ -73,7 +73,8 @@ Defects:
 - [ ] D1 S5 and S6 on Bitcoin: put the own claim key and refund key in the
       policy. Require counterparty-leg `claim_key` and own-leg `refund_key` to
       equal them at accept, lock and reveal.
-- [ ] D2 Notional is unknown unless the price of each leg is known.
+- [x] D2 Notional is unknown unless the price of each leg is known
+      (policy-execution `83e7e57`).
 - [ ] D3 Solana: check the escrow account discriminator in `ProgramPin`.
 - [ ] D4 Record every fact that the evaluator read, with provenance and the
       observed value.
@@ -119,10 +120,15 @@ Gaps:
       Needs the Mnemonik record resolver (planned).
 - [ ] G20 EVM beacon, legacy-slot and diamond proxies in S7.
 - [ ] G21 Solana loader, ProgramData, code hash and escrow token account in S7.
-- [ ] G22 Solana instruction table of spec 4.2: HTLC accounts, compute bounds,
-      associated token account creates, token program, nonce scope.
+- [ ] G22 Solana instruction table of spec 4.2: compute bounds, associated
+      token account creates, token program, nonce scope. HTLC accounts: done
+      (policy-execution `83e7e57`).
 - [ ] G23 E2 Ed25519 message builder.
 - [ ] G24 Reason codes for S9, S10, S26 and S27.
+
+Done outside this list, from the review of policy-execution#7 (`83e7e57`): no
+warrant without a verified ACCEPT of the proposed terms; Bitcoin fee limits
+from the profile; Solana lookup tables from chain facts.
 
 Acceptance: every item above has a test that fails without the fix; Verus and
 the mutation script pass again after D6 and G1.

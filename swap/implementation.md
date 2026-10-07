@@ -356,7 +356,7 @@ new (G24, G15).
 ProfileParams {
   chain: CAIP-2, mainnet: bool, family: Bitcoin | Evm | Solana,
   clock: ClockBounds, finality: Confirmations(k by value band) | FinalizedTag,
-  min_evidence: by value band, fee: { worst_claim, worst_refund, raise: method },
+  min_evidence: by value band, fee: { worst_lock, worst_claim, worst_refund, raise: method },
   refund: Prepared | Permissionless, swap_id_binding: bool,
   template_enforces_len32: bool, profile_hash
 }
@@ -387,9 +387,9 @@ profile clock follows G1, and `swap_id_binding` becomes `lock_id_binding`
 
 | Family | Input | Accepted shape |
 |---|---|---|
-| Bitcoin | PSBT version 0 | Inputs: own coins (witness UTXO script in the own set). Outputs: exactly one HTLC output with the derived `scriptPubKey` and the leg amount, plus at most one change output to an own script. Sighash type absent, `0x00` or `0x01`. |
+| Bitcoin | PSBT version 0 | Inputs: own coins (witness UTXO script in the own set). Outputs: exactly one HTLC output with the derived `scriptPubKey` and the leg amount, plus at most one change output to an own script. Sighash type absent, `0x00` or `0x01`. Fee (input value minus output value) at most the profile's worst-case fee of the action. |
 | EVM | Unsigned EIP-1559 transaction | `chain_id` equals the leg chain; empty access list. Lock: `to` = pinned HTLC; native: `value` = amount; token: `value` = 0. Approve: `to` = token, `approve(htlc, gross_debit)`. Claim and refund calls as in the reference ABI. |
-| Solana | Legacy or version 0 message | Every instruction's program is allowed for the mode (spec 4.2 with the fixes). Compute budget: only unit limit and unit price. System: only `AdvanceNonceAccount`, first, pinned accounts, durable-nonce mode only. Ed25519: E2 mode only. Address lookup tables need the resolved addresses as chain facts. |
+| Solana | Legacy or version 0 message | Every instruction's program is allowed for the mode (spec 4.2 with the fixes). Compute budget: only unit limit and unit price. System: only `AdvanceNonceAccount`, first, pinned accounts, durable-nonce mode only. Ed25519: E2 mode only. Lookup-table addresses come from tables observed on the chain, by table address and index. The HTLC instruction has exactly the reference accounts, in order, with their signer and writable flags. |
 
 Reference EVM HTLC ABI:
 
@@ -403,6 +403,15 @@ refund(bytes32 swapId)
 Reference Solana HTLC instruction data: one tag byte (`0` lock, `1` claim, `2`
 refund) and then the fields in the order of the EVM ABI, little-endian
 integers, 32-byte keys.
+
+Reference Solana HTLC accounts. Lock: the sender (signer, writable) and the
+escrow PDA (writable). A token lock then has the sender's and the escrow's
+associated token accounts (writable), the mint and the token program. The
+System Program is last. Claim and refund: the caller (signer, writable), the
+escrow PDA (writable) and the payee (writable). The payee is the receiver for a
+claim and `refund_to` for a refund. For a token, the payee's associated token
+account takes the payee's place, followed by the escrow's token account, the
+mint and the token program.
 
 Transaction binding:
 
@@ -423,6 +432,7 @@ prevouts from chain facts (G12).
 
 ```text
 authorize(request, context) →
+  no verified ACCEPT of the proposed terms — entry: Deny record; exit: Halt
   entry action:  checks (S1–S15, S20–S25 as they apply) — fail → Deny record
                  facts → decide(rule, facts) — Allow → SwapWarrant
                                                Ask   → Ask record
@@ -461,6 +471,10 @@ Code: `policy-execution` commit `e9e9d31` on branch `ccr-7c731f40-t51t9k`,
 crates `swap-verified` and `swap-core`. mnemonik-xyz/policy-execution#7 merges
 the branch into `main`. A rerun on 2026-10-07 gave the same test counts.
 Verus and the mutation scripts were not run again.
+
+Review fixes at commit `83e7e57` (2026-10-07): 85 `swap-core` tests passed (60
+unit, 25 pipeline); `check_mutations.py` caught 18 of 18 disabled checks; the
+`wasm32-unknown-unknown` build succeeds. `swap-verified` did not change.
 
 | Item | Result |
 |---|---|

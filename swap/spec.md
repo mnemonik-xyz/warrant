@@ -1155,14 +1155,21 @@ The code in `policy-execution` at commit `e9e9d31` (`swap-verified`, `swap-core`
 implements version 0.2 of this specification. The tables below list the
 differences from version 0.3. Each row has a task with the same id in
 [tasks.md](tasks.md), section W2.1. Code paths are relative to the
-`policy-execution` root. Paths without a crate name are in `swap-core/src/`.
+`policy-execution` root and point to commit `e9e9d31`. Paths without a crate
+name are in `swap-core/src/`.
+
+A code review of mnemonik-xyz/policy-execution#7 led to commit `83e7e57`. It
+fixes D2 and the HTLC account check of G22. It also adds three fixes that the
+tables do not list. No warrant is issued without a verified ACCEPT of the
+proposed terms (part of G5). A Bitcoin transaction pays at most the profile's
+worst-case fee. Solana lookup-table addresses come from chain facts.
 
 **Defects.** These rows break a rule that version 0.2 also has. Fix them first.
 
 | Id | Spec | Code | Defect | Severity |
 |---|---|---|---|---|
 | D1 | S5, S6, 8.2 | `checks.rs:169-178`, `tx.rs:26-34`, `bitcoin.rs:190-196` | S5 and S6 compare only CAIP-10 accounts. On Bitcoin, the claim key and the refund key decide who can spend. No check compares them with the own keys. The initiator can put its own key in `keys.receiver` of leg A and still name the responder's address. The responder then locks leg B and loses both legs. | high |
-| D2 | 6.1, S14 | `authorize.rs:289-292` | When the price of one leg is unknown, the notional takes the value of the other leg. The notional must be unknown. `NotionalAtMost` can then be true without a sure value, and S14 can choose a weaker finality band. | medium |
+| D2 | 6.1, S14 | `authorize.rs:289-292` | When the price of one leg is unknown, the notional takes the value of the other leg. The notional must be unknown. `NotionalAtMost` can then be true without a sure value, and S14 can choose a weaker finality band. | medium, fixed in `83e7e57` |
 | D3 | 8.4 Solana | `solana.rs:362-388` | `ProgramPin::matches` does not check the escrow account discriminator. S7 accepts any program-owned account at the expected address. | medium |
 | D4 | 4.1, 5 | `authorize.rs:126-133`, `authorize.rs:471-494` | The warrant does not record every fact that the evaluator read. `give_chain`, `take_chain` and the price reports are missing. Provenance is `None` for signed and chain facts. `resolve()` records `true`, not the observed value. A verifier cannot run the decision again from the warrant. | medium |
 | D5 | 7.3 | `profile.rs:93-96` | A Bitcoin profile must have `min_block_secs > 0`. Block intervals are random, so a positive floor is not a sure minimum. The earliest real time of a Bitcoin height lock can be too late. G1 removes this rule. | medium |
@@ -1196,7 +1203,7 @@ differences from version 0.3. Each row has a task with the same id in
 | G19 | 5.1, 6.2 | `authorize.rs:22-39`, `authorize.rs:421-431` | Identity is an authority credential, not a Mnemonik agent record resolved to `active`. `CounterpartyNotListed` can be true without an established identity, and it does not check the leg accounts. Needs the Mnemonik record resolver (planned). | medium |
 | G20 | 8.4 EVM | `evm.rs:318-325`, `evm.rs:357-364` | Only EIP-1967 implementation and admin slots are read. A beacon, legacy-slot or diamond proxy passes S7. | medium |
 | G21 | 8.4 Solana | `solana.rs:352-360`, `solana.rs:378-382` | No loader owner, ProgramData address or code hash check. No check of the escrow token account. A program under another loader passes. | medium |
-| G22 | 4.2 Solana | `solana.rs:223-268`, `solana.rs:189-195`, `authorize.rs:349-369` | The decoder does not check HTLC instruction accounts or compute bounds. It accepts any associated token account create. It does not bind the token program to the asset. It allows a durable nonce in every message, not only in the prepared refund. | medium |
+| G22 | 4.2 Solana | `solana.rs:223-268`, `solana.rs:189-195`, `authorize.rs:349-369` | The decoder does not check compute bounds. (`83e7e57` adds the HTLC instruction account check.) It accepts any associated token account create. It does not bind the token program to the asset. It allows a durable nonce in every message, not only in the prepared refund. | medium |
 | G23 | 4.3, 9 E2 | `solana.rs:183-207` | No builder of the Ed25519 message `warrant.swap.v1/ed25519-ix` with the on-chain warrant digest. | low |
 | G24 | S9, S10, S26, S27 | `checks.rs:47-52`, `checks.rs:163-165`, `checks.rs:226-235` | Reason codes use version 0.2 numbers: `S4_HASHLOCK_REUSED` and `S8_FORBIDDEN_RISK_FLAG`. No `S26` or `S27` code exists. | low |
 
