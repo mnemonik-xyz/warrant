@@ -1,15 +1,13 @@
 # Warrant
 
-Two independently versioned prototypes explore policy-controlled agent payments:
+One prototype explores policy-controlled agent payments:
 
 - [Policy execution](policy-execution/README.md): a fixed Rust policy evaluator,
   Verus correctness proofs, authenticated evidence and RISC Zero execution proofs.
-- [Proof-backed payments](proof-execution/README.md): the earlier Circom/Groth16
-  prototype with an ERC-20 payment vault and local EVM tests.
 
-The directories are Git submodules pinned to specific commits. To fetch their
+The directory is a Git submodule pinned to a specific commit. To fetch its
 contents after cloning this repository, run `git submodule update --init --recursive`.
-Each prototype documents its own setup, tests, diagrams and limitations.
+The prototype documents its own setup, tests, diagrams and limitations.
 
 ## Design documents
 
