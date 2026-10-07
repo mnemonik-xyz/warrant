@@ -10,7 +10,7 @@ This document proposes the decisions of step W0, pending owner sign-off
 references like "spec 7.3" point to [spec.md](spec.md).
 
 Spec version 0.3 changes several rules. Spec section 13.4 lists each
-difference from the code with an id: D1 to D9 for defects, G1 to G24 for gaps.
+difference from the code with an id: D1 to D9 for defects, G1 to G25 for gaps.
 The sections below that version 0.3 changes have a note with these ids. Where
 this document and spec 13.4 differ, spec 13.4 gives the target.
 
@@ -36,15 +36,22 @@ Other choices that this document makes, all inside the spec's freedom:
 - **Bytes in the payload.** Lowercase hexadecimal, no `0x` prefix.
 - **Hashes.** `terms_hash`, `inner_sig_hash`, warrant hashes and the Solana
   transaction binding use BLAKE3. CAIP identifiers use SHA-256 (as above).
-- **Relative timelocks.** `swap-core` converts a relative timelock to an
-  absolute height or time from the observed confirmation of the lock. The
-  verified arithmetic handles absolute timelocks only. The responder's leg
-  (leg B) needs an absolute timelock: a relative one starts at an unknown
-  future confirmation, and S11 could not bound it.
+- **Relative timelocks.** Leg A only (spec 3.2). Every entry action denies a
+  relative leg B timelock (`TIMELOCK_FORM`): it would start at the confirmation
+  of the responder's own lock, which S13 cannot observe. `swap-core` converts a
+  relative block count to an absolute height from the observed confirmation of
+  the lock. A lock read at block `h` with `k` confirmations is in block
+  `h + 1 − k`. BIP 68 permits the refund first in that block plus `n`. The
+  adapter's timelock must equal this value. Before the lock exists (accept and
+  the initiator's lock), `T_A` counts from the block after the observed tip,
+  the earliest confirmation. A relative time is not supported, because no
+  observation carries its BIP 68 base (G25). The verified arithmetic handles absolute
+  timelocks only (G2, mnemonik-xyz/policy-execution#9).
 - **Own Bitcoin coins** are Taproot key-path outputs, so the signer computes
   every BIP 341 sighash itself. PSBT version 0 only.
 - **Validity windows** of warrants use the signer's real time, for every action
-  (spec 4.1).
+  (spec 4.1). A verifier checks the window at its own real time. It allows a
+  stated skew of at most 60 seconds (`MAX_SKEW_SECS`).
 - **Reference HTLC interfaces.** The EVM and Solana decoders check calls
   against a reference interface (section 4.6). A venue adapter (W4) maps a
   different contract onto the same intent.
@@ -320,12 +327,19 @@ Provenance = Signed { authority, signature_ok } | Chain { method, block_hash,
 - `notional` rounds up to whole units of the reference currency.
 - Ledger facts are unknown when the ledger counter is behind the last
   persisted counter (S25).
+- The `height` of a lock fact is the block at which the provider read the lock
+  and counted its confirmations (1 when the lock is in that block). It is not
+  the block that contains the lock. For a relative leg A, read the chain A tip
+  at or after the lock: a lock read above the observed tip gives no `T_A`.
 - A bare assertion from the agent never becomes a fact.
 
 ### 4.4 Obligatory checks
 
 Each check is a function that returns `Ok(())` or a `Violation` with a fixed
-reason code (`S1_HASH_ALG`, `S2_PREIMAGE_LEN`, …). The checks that the
+reason code (`S1_HASH_ALG`, `S2_PREIMAGE_LEN`, …). A record carries only the
+code, and the code of the inner check when S13 wraps one. The detail stays in
+a local diagnostic (`Outcome::diagnostic`). `checks::code::ALL` lists every
+code. The checks that the
 signer runtime owns (watchers, fee raising, prepared refund) take the
 runtime state as an input value and check it.
 
@@ -342,16 +356,16 @@ runtime state as an input value and check it.
 | S10 | lock, consumed swap ids | `swap_id` bound where the profile supports it; not consumed |
 | S11 | timelocks, profiles | `s11_holds` |
 | S12 | `T_B`, profile | `s12_holds` (reveal only) |
-| S13 | initiator lock, planned `T_B` | S14 and S11 for the planned `T_B` (responder lock only) |
+| S13 | initiator lock, planned `T_B` | S14, and S11 for the planned `T_B` with `T_A` from the terms and the observed confirmation; the adapter timelock must equal it (responder lock only) |
 | S14 | counterparty lock | depth or finalized status per profile and value band |
 | S15 | fee reserves | reserve ≥ worst-case claim fee + refund fee on each chain |
 | S16 | runtime state | watchers armed for the swap |
 | S17 | profile, runtime state | prepared refund stored, or profile refund is permissionless |
 | S18 | action | exit actions never reach the evaluator |
 | S19 | profile | a fee-raising method exists |
-| S20 | warrant | binds chain id, contract, swap id, nonce and validity window |
+| S20 | warrant, verifier real time, stated skew | binds chain id, contract, swap id and nonce; `valid_after − skew ≤ now_real ≤ valid_until + skew`, skew at most 60 s; an inverted window is rejected |
 | S21 | consumed warrants | warrant hash not consumed |
-| S22 | ledger | policy version ≥ last seen version |
+| S22 | ledger | a higher version than the stored one, or the same version with the same policy hash; no stored policy passes |
 | S23 | policy, build | `evaluator_id` equals the pinned build id |
 | S24 | decoded transaction, intent | exact match (section 4.6) |
 | S25 | ledger | counter monotonic; otherwise ledger facts unknown |
@@ -362,7 +376,8 @@ changes these rows (planned, spec 13.4): S4 becomes an operational duty of
 (G24). S5 and S6 compare the Bitcoin claim and refund keys (D1, done in
 `33f8cdf`). S8 checks
 `payout_basis` (G5). S10 checks `lock_id` and consumed counterparty locks (G4,
-G14). S15 uses earmarks (G16). S22 keeps the policy hash (D9). S23 allows
+G14). S15 uses earmarks (G16). S22 keeps the policy hash with the version
+(D9, done in mnemonik-xyz/policy-execution#9). S23 allows
 `"structural"` for exits and needs `owner_approval` for `human-review` (G7).
 S24 allows fee-only variants (G10). S26 gets its own reason code, and S27 is
 new (G24, G15).
@@ -390,13 +405,16 @@ Family details:
 - **EVM.** Contract identity is the address plus the `EXTCODEHASH` fact; a
   proxy fact (EIP-1967 slot set) fails S7 unless the policy pins it.
 - **Solana.** Contract identity is the program id plus the upgrade authority
-  fact; the escrow address must be the expected PDA.
+  fact; the escrow address must be the expected PDA. An observed lock needs an
+  escrow account that the program owns and whose data starts with the reference
+  discriminator (section 4.6). S7 accepts the own lock only when the escrow address holds no account, or only a System-owned
+  account without data (D3, done in mnemonik-xyz/policy-execution#9).
 
 Version 0.3 (planned, spec 13.4): the claim leaf starts with
 `<lock_id> OP_DROP`, and the keys are `claim_key` and `refund_key` (G4). The
 refund input has `nSequence` `0xFFFFFFFD` (G3). EVM S7 covers beacon,
 legacy-slot and diamond proxies (G20). Solana S7 checks the loader, the code
-hash, the escrow discriminator and the escrow token account (G21, D3). The
+hash and the escrow token account (G21). The
 profile clock follows G1, and `swap_id_binding` becomes `lock_id_binding`
 (G4).
 
@@ -430,6 +448,14 @@ claim and `refund_to` for a refund. For a token, the payee's associated token
 account takes the payee's place, followed by the escrow's token account, the
 mint and the token program.
 
+Reference Solana HTLC escrow account. The lock instruction creates the escrow
+PDA from the seeds `[b"htlc", swap_id]`, and the program owns it. Its data
+starts with the 8-byte discriminator `sha256("account:Escrow")[..8]`
+(`1fd57bbbba16da9b`), the Anchor account convention. The observation adapter
+reports the account at the escrow address as absent (a null RPC result) or as
+its owner, its data length and its first 8 data bytes. Quorum compares these
+facts as one value.
+
 Transaction binding:
 
 | Family | Binding |
@@ -449,7 +475,8 @@ prevouts from chain facts (G12).
 
 ```text
 authorize(request, context) →
-  no verified ACCEPT of the proposed terms — entry: Deny record; exit: Halt
+  terms that do not encode, or no verified ACCEPT of the proposed terms —
+                 entry: Deny record; exit: Halt
   entry action:  checks (S1–S15, S20–S25 as they apply) — fail → Deny record
                  facts → decide(rule, facts) — Allow → SwapWarrant
                                                Ask   → Ask record, or Deny
@@ -505,8 +532,15 @@ n-block clock model, `D_refund(B)` and S27 in mnemonik-xyz/policy-execution#8
 Verus 52 verified, 0 errors, and 35 of 35
 mutations rejected; 94 `swap-core` tests passed (64 unit, 30 pipeline);
 `check_mutations.py` caught 19 of 19 disabled checks; the
-`wasm32-unknown-unknown` build succeeds. The table below gives the first results
-at `e9e9d31`.
+`wasm32-unknown-unknown` build succeeds.
+
+D3, D7, D8, D9 and G2 in mnemonik-xyz/policy-execution#9 (commit `94174cf`,
+2026-10-07, merged into `main` as `89308bc`): 119 `swap-core` tests passed (79 unit, 40 pipeline);
+`check_mutations.py` caught 21 of 21 disabled checks, with the new checks
+`leg_b_absolute` and `s13_timelock`; the `wasm32-unknown-unknown` build
+succeeds. Manual mutations of each new rule that the script cannot reach each
+fail a test. `swap-verified` did not change. The table below gives the first
+results at `e9e9d31`.
 
 | Item | Result |
 |---|---|
