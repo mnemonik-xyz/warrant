@@ -1072,8 +1072,8 @@ Status on 2026-10-07: the evaluator, the timeout arithmetic and their proofs
 exist (`swap-verified`), and so do the safety checks S1 to S25 and S27, the
 chain profiles and the transaction decoders, with their tests (`swap-core`).
 They implement version 0.2 of this specification, plus the n-block clock model,
-`D_refund(B)` in S11 and S27 from mnemonik-xyz/policy-execution#8.
-mnemonik-xyz/policy-execution#9 (open) fixes D3, D7, D8, D9 and G2. Section 13.4
+`D_refund(B)` in S11 and S27 from mnemonik-xyz/policy-execution#8, and the
+fixes of D3, D7, D8, D9 and G2 from mnemonik-xyz/policy-execution#9. Section 13.4
 lists the later requirements that they do not implement yet. The proof covers
 the evaluator and the arithmetic only. See [implementation.md](implementation.md) section 5 for the
 results.
@@ -1098,7 +1098,9 @@ results.
 The swap crates are on `policy-execution` `main`. mnemonik-xyz/policy-execution#7
 merged them as commit `2e19118`. That commit contains the review fixes `83e7e57`
 and `33f8cdf` of the pull request branch. mnemonik-xyz/policy-execution#8 added
-the clock model and S27 as commit `e0a4285`, which the submodule pins. The swap
+the clock model and S27 as commit `e0a4285`. mnemonik-xyz/policy-execution#9
+added the fixes of D3, D7, D8, D9 and G2 as commit `89308bc`, which the
+submodule pins. The swap
 crates change no invoice crate and no guest image id.
 
 The evaluator is already separate from the zkVM code. `core` and `verified` do
@@ -1187,7 +1189,7 @@ verified, 0 errors; 35 of 35 mutations rejected). S27 runs before lock and
 before reveal; on Solana it also checks the mint pause and, once the paying lock
 exists, the escrow token account.
 
-mnemonik-xyz/policy-execution#9 (open) fixes D3, D7, D8, D9 and G2:
+mnemonik-xyz/policy-execution#9, merged as `89308bc`, fixes D3, D7, D8, D9 and G2:
 
 - **D3.** Solana S7 reads the escrow account. An observed lock needs a
   program-owned escrow whose data starts with the reference discriminator.

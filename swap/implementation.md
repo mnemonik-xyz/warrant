@@ -534,8 +534,8 @@ mutations rejected; 94 `swap-core` tests passed (64 unit, 30 pipeline);
 `check_mutations.py` caught 19 of 19 disabled checks; the
 `wasm32-unknown-unknown` build succeeds.
 
-D3, D7, D8, D9 and G2 in mnemonik-xyz/policy-execution#9 (commit `b8e5055`,
-2026-10-07): 119 `swap-core` tests passed (79 unit, 40 pipeline);
+D3, D7, D8, D9 and G2 in mnemonik-xyz/policy-execution#9 (commit `94174cf`,
+2026-10-07, merged into `main` as `89308bc`): 119 `swap-core` tests passed (79 unit, 40 pipeline);
 `check_mutations.py` caught 21 of 21 disabled checks, with the new checks
 `leg_b_absolute` and `s13_timelock`; the `wasm32-unknown-unknown` build
 succeeds. Manual mutations of each new rule that the script cannot reach each
