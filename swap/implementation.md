@@ -1,11 +1,18 @@
 # Warrant for swaps: implementation specification for W1 and W2
 
-Version 0.2 · 2026-10-05 · Status: **W1 and W2 implemented** (see section 5). Companion to
-[the swap specification](spec.md). Task list: [tasks.md](tasks.md).
+Version 0.2 · 2026-10-07 · Written for spec version 0.2. Status: **W1 and W2
+implemented against spec version 0.2** at `policy-execution` commit `e9e9d31`
+(section 5). Companion to [the swap specification](spec.md). Task list:
+[tasks.md](tasks.md).
 
-This document fixes the decisions of step W0 and specifies the two crates of
-steps W1 and W2. Section references like "spec 7.3" point to
-[spec.md](spec.md).
+This document proposes the decisions of step W0, pending owner sign-off
+(tasks.md T0.4). It specifies the two crates of steps W1 and W2. Section
+references like "spec 7.3" point to [spec.md](spec.md).
+
+Spec version 0.3 changes several rules. Spec section 13.4 lists each
+difference from the code with an id: D1 to D9 for defects, G1 to G24 for gaps.
+The sections below that version 0.3 changes have a note with these ids. Where
+this document and spec 13.4 differ, spec 13.4 gives the target.
 
 ---
 
@@ -51,7 +58,9 @@ change, so the invoice guest image id does not change (spec 13.1).
 policy-execution/
   swap-verified/   warrant-swap-verified   W1  vstd, optional serde
   swap-core/       warrant-swap-core       W2  swap-verified, serde, serde_json,
-                                                sha2, sha3, blake3, k256, bs58
+                                                sha2, sha3, blake3, k256,
+                                                curve25519-dalek, bs58,
+                                                rand_core, zeroize
 ```
 
 Rules:
@@ -147,6 +156,11 @@ code, so no overflow exists.
 computes it. `decide` maps `Some(true)` to `Allow`, `Some(false)` to `Deny` and
 `None` to `Ask`.
 
+Version 0.3 (planned, spec 13.4): `PeriodNotionalAtMost` takes a reference
+currency (G17). `CounterpartyIn` and `CounterpartyNotListed` use a Mnemonik
+agent record resolved to `active` (G19). `AssetRiskWithin` has a known or
+unknown state for each flag, and a present forbidden flag gives `false` (G18).
+
 ### 3.3 Theorems
 
 | Name | Statement |
@@ -157,6 +171,11 @@ computes it. `decide` maps `Some(true)` to `Allow`, `Some(false)` to `Deny` and
 | `decide` postcondition | `Allow` ⇔ `kleene = Some(true)`; `Deny` ⇔ `kleene = Some(false)` |
 
 ### 3.4 Timeout arithmetic
+
+This section implements spec version 0.2. Version 0.3 replaces the fixed block
+interval with an n-block bound at a stated failure probability and adds
+`D_refund(B)` to S11 (G1, D5). `reveal_window` must also subtract `D_margin`
+(D6). These changes are planned (spec 13.4).
 
 ```text
 ClockBounds { min_block_secs, max_block_secs, max_lead_secs, max_lag_secs }
@@ -232,13 +251,14 @@ swapped.
 | `jcs` | RFC 8785 canonical JSON for the values that warrants use |
 | `dsl` | JSON mini-DSL → `SwapRule`; `SwapPolicy`; `validate_policy` |
 | `facts` | Observations with provenance; quorum; oracle; fact builder → `SwapFacts3` |
-| `checks` | Obligatory checks S1 to S25 with fixed reason codes |
+| `checks` | Obligatory checks S1 to S25 of spec version 0.2 with fixed reason codes. The Bitcoin decoder enforces S26. S27 is planned (G15). |
 | `profile` | `ChainProfile` parameters; Bitcoin, EVM and Solana profiles |
 | `tx` | Transaction decoders and intent matching (S24) |
 | `warrant` | `SwapWarrant`, `DecisionRecord`, `TxBinding`, payload bytes, hash chain |
 | `authorize` | The pipeline: checks → facts → evaluator → warrant or record |
 | `secret` | Secret type for S4 (CSPRNG input, no `Debug`, no `Serialize`, zeroized) |
 | `ledger` | Ledger state for ledger facts and the consumed sets (S10, S21, S22, S25) |
+| `negotiation` | Planned (G5): message bodies, `intent_id`, `terms_hash`, transcript rules of spec 3.5 |
 
 ### 4.2 The JSON mini-DSL
 
@@ -320,6 +340,16 @@ runtime state as an input value and check it.
 | S24 | decoded transaction, intent | exact match (section 4.6) |
 | S25 | ledger | counter monotonic; otherwise ledger facts unknown |
 
+The rows describe the code, which follows spec version 0.2. Version 0.3
+changes these rows (planned, spec 13.4): S4 becomes an operational duty of
+`swap-signer`. Hashlock reuse moves to S10 and forbidden flags move to S9
+(G24). S5 and S6 compare the Bitcoin claim and refund keys (D1). S8 checks
+`payout_basis` (G5). S10 checks `lock_id` and consumed counterparty locks (G4,
+G14). S15 uses earmarks (G16). S22 keeps the policy hash (D9). S23 allows
+`"structural"` for exits and needs `owner_approval` for `human-review` (G7).
+S24 allows fee-only variants (G10). S26 gets its own reason code, and S27 is
+new (G24, G15).
+
 ### 4.5 Chain profiles
 
 ```text
@@ -344,6 +374,14 @@ Family details:
   proxy fact (EIP-1967 slot set) fails S7 unless the policy pins it.
 - **Solana.** Contract identity is the program id plus the upgrade authority
   fact; the escrow address must be the expected PDA.
+
+Version 0.3 (planned, spec 13.4): the claim leaf starts with
+`<lock_id> OP_DROP`, and the keys are `claim_key` and `refund_key` (G4). The
+refund input has `nSequence` `0xFFFFFFFD` (G3). EVM S7 covers beacon,
+legacy-slot and diamond proxies (G20). Solana S7 checks the loader, the code
+hash, the escrow discriminator and the escrow token account (G21, D3). The
+profile clock follows G1, and `swap_id_binding` becomes `lock_id_binding`
+(G4).
 
 ### 4.6 Transaction decoders (S24)
 
@@ -370,9 +408,16 @@ Transaction binding:
 
 | Family | Binding |
 |---|---|
-| Bitcoin | unsigned txid (hex, display order) and the sighash types |
-| EVM | `keccak256(0x02 ‖ rlp(unsigned fields))` |
+| Bitcoin | unsigned txid (hex, display order), each BIP 341 sighash and its type |
+| EVM | `keccak256(0x02 ‖ rlp(unsigned fields))` of each transaction, in order (`approve`, then lock) |
 | Solana | `blake3(message bytes)` |
+
+This is the reference interface of spec version 0.2. Version 0.3 (planned,
+spec 13.4) keys each lock by `lockId` in the EVM calls, in the Solana
+instruction data and in the PDA seeds (G4). It binds the prepared refund in
+`warrant(lock)` (G11), allows a zero-allowance reset and a permit (G13),
+follows the Solana instruction table of spec 4.2 (G22) and takes Bitcoin
+prevouts from chain facts (G12).
 
 ### 4.7 The authorization pipeline
 
@@ -391,6 +436,14 @@ The warrant payload is the JCS form of the `SwapWarrant` of spec 4.1, with the
 encodings of section 1. `warrant_hash = blake3(payload)`. `prev_warrant` links
 the records of one swap and one party.
 
+This is the version 0.2 behavior of the code. Version 0.3 changes it (planned,
+spec 13.4). A failed exit check rejects only that transaction and alerts the
+owner. The signer then builds the exit from the recorded lock parameters (G9).
+An exit warrant has `class: "exit"`, `evaluator_id: "structural"` and the
+passed check codes in `reasons` (G7). A reveal after its first broadcast is an
+exit action (G8). The warrant also gets `fee_ceiling`, `owner_approval`,
+`replaces` and `onchain_digest` (G7).
+
 ### 4.8 Tests and acceptance
 
 - One negative test per check: the request passes with the check and fails
@@ -402,10 +455,12 @@ the records of one swap and one party.
 - Cross-checks against `rust-bitcoin` for the Taproot output and PSBT parsing.
 - `cargo build --target wasm32-unknown-unknown -p warrant-swap-core`.
 
-## 5. Results (2026-10-05)
+## 5. Results (2026-10-05, commit `e9e9d31`)
 
-Code: `policy-execution` branch `ccr-7c731f40-t51t9k`, crates `swap-verified`
-and `swap-core`.
+Code: `policy-execution` commit `e9e9d31` on branch `ccr-7c731f40-t51t9k`,
+crates `swap-verified` and `swap-core`. mnemonik-xyz/policy-execution#7 merges
+the branch into `main`. A rerun on 2026-10-07 gave the same test counts.
+Verus and the mutation scripts were not run again.
 
 | Item | Result |
 |---|---|
