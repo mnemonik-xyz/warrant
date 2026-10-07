@@ -70,9 +70,10 @@ they break version 0.2 rules too. Each fix adds a test that fails without it.
 
 Defects:
 
-- [ ] D1 S5 and S6 on Bitcoin: put the own claim key and refund key in the
+- [x] D1 S5 and S6 on Bitcoin: put the own claim key and refund key in the
       policy. Require counterparty-leg `claim_key` and own-leg `refund_key` to
-      equal them at accept, lock and reveal.
+      equal them at accept, lock and reveal (policy-execution `33f8cdf`; an
+      observed lock must also carry its output script).
 - [x] D2 Notional is unknown unless the price of each leg is known
       (policy-execution `83e7e57`).
 - [ ] D3 Solana: check the escrow account discriminator in `ProgramPin`.
@@ -93,7 +94,9 @@ Gaps:
       to S11 and its proof.
 - [ ] G2 Reject a relative leg B timelock at accept. Compute the absolute leg A
       timelock from the observed confirmation.
-- [ ] G3 Bitcoin refund input `nSequence` = `0xFFFFFFFD`.
+- [x] G3 No signed Bitcoin transaction waits: lock and claim final now; refund
+      `nLockTime` from `T` up to the tip, no relative lock (policy-execution
+      `33f8cdf`).
 - [ ] G4 `lock_id` keys every lock; `<lock_id> OP_DROP` claim leaf; fields
       `claim_key` and `refund_key`.
 - [ ] G5 `negotiation` module: bodies, `intent_id`, `terms_hash`, transcript
@@ -128,7 +131,9 @@ Gaps:
 
 Done outside this list, from the review of policy-execution#7 (`83e7e57`): no
 warrant without a verified ACCEPT of the proposed terms; Bitcoin fee limits
-from the profile; Solana lookup tables from chain facts.
+from the profile; Solana lookup tables from chain facts. From the owner's
+decision on open question 5 (`33f8cdf`): an `Ask` caused by an unknown price
+becomes `Deny` (`PRICE_UNKNOWN`).
 
 Acceptance: every item above has a test that fails without the fix; Verus and
 the mutation script pass again after D6 and G1.

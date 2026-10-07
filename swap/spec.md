@@ -522,7 +522,11 @@ A price fact needs a signed source. Examples: a signed pull-oracle update
 (Pyth, signed through Wormhole), a signed Chainlink Data Streams report, or an
 on-chain aggregator read at a finalized block. The fact carries the price, the
 confidence interval and the publish time. A stale price or a wide confidence
-interval makes the price `Unknown`. The policy then decides, usually `Ask`.
+interval makes the price `Unknown`. Missing asset facts make the leg value
+`Unknown` too. A missing price never goes to the owner. When the evaluator
+returns `Ask` and the rule reads a price value (notional, period notional or
+price deviation) that is `Unknown`, the signer denies the action with reason
+`PRICE_UNKNOWN`. An `Allow` or a `Deny` from the evaluator does not change.
 
 ---
 
@@ -538,6 +542,8 @@ The swap evaluator uses the existing Warrant design (whitepaper section 5):
 - A pessimistic pass maps unknown to false. True means `Allow`.
 - An optimistic pass maps unknown to true. False means `Deny`.
 - Any other result means `Ask`. The policy signer routes `Ask` to the owner.
+  One fixed exception follows the evaluator: an `Ask` from a rule that reads an
+  unknown price value becomes `Deny` (`PRICE_UNKNOWN`, section 5.4).
 
 The evaluator is a pure function of the rule tree and the facts. It reads no
 clock, no network and no state. The policy signer supplies time, chain facts and
@@ -648,7 +654,7 @@ cannot verify SHA-256 with a length check in its lock is not supported.
 | ID | Check | Loss it prevents |
 |---|---|---|
 | S5 | The claim pays a receiver fixed at lock time: a stored receiver account on EVM and Solana. It never pays the caller. On Bitcoin, script cannot fix the destination of a spend. Instead, the claim leaf requires a signature by the receiver's 32-byte x-only `claim_key`. On a counterparty lock, the receiver is the checking party's own receive account or key, taken from the policy, never from the agent or the counterparty. The responder checks this on leg A before `lock`. The initiator checks it on leg B before `reveal`. | Anyone who sees `s` claims the funds. The counterparty names its own account as receiver; the party locks or reveals `s` and receives nothing. |
-| S6 | The refund pays a `refund_to` account fixed at lock time. On Bitcoin, the refund leaf requires a signature by the `refund_key`. | A third party redirects the refund |
+| S6 | The refund pays a `refund_to` account fixed at lock time. On Bitcoin, the refund leaf requires a signature by the `refund_key`. On the own lock, the `refund_key` is the checking party's own key, taken from the policy. | A third party redirects the refund |
 | S7 | The lock contract identity matches the pinned identity (section 8.4) | A look-alike contract that never pays out |
 | S8 | The observed amount and asset equal the terms. The signer reads the decimals from the chain (S9) and uses them only for notional and price. For a token with a transfer fee, the signer reads the fee configuration on chain, computes the gross debit that delivers the agreed net amount, and checks the net amount in the lock. The terms state whether the claim payout is gross or net of a second fee. | Short payment |
 | S9 | The asset identity and its risk flags come from the chain, not from the counterparty. An asset with the `confidential_amount` or `non_transferable` flag (section 8.5) fails this check. | A fake token with the same symbol; an amount that the signer cannot verify; a claim that cannot succeed |
@@ -799,7 +805,7 @@ profile hash in the policy. A profile supplies:
 | SHA-256 | `OP_SHA256` | Precompile `0x02` | `sol_sha256` system call |
 | Length check | `OP_SIZE 32 OP_EQUALVERIFY` before `OP_SHA256` | Preimage parameter typed `bytes32` | Preimage argument typed `[u8; 32]` |
 | Claim leaf / function | `<lock_id> OP_DROP OP_SIZE 32 OP_EQUALVERIFY OP_SHA256 <H> OP_EQUALVERIFY <claim_key> OP_CHECKSIG`. Every key in a leaf is a 32-byte x-only key (BIP 340). In tapscript, a key of any other non-zero size is an unknown key type (BIP 342). `OP_CHECKSIG` then succeeds for any non-empty signature, and anyone who sees `s` can claim through a miner. The template and the S7 re-derivation reject such a key. | `claim(lock_id, s)` pays the stored receiver | `claim` pays the stored receiver token account |
-| Refund leaf / function | `<T> OP_CHECKLOCKTIMEVERIFY OP_DROP <refund_key> OP_CHECKSIG`. The refund transaction sets `nLockTime` to the same kind as `T` (height or time) and to at least `T`. Its input `nSequence` is `0xFFFFFFFD`: below `0xFFFFFFFF`, so CLTV can pass (BIP 65), and with the disable flag (bit 31) set, so BIP 68 adds no relative lock. A relative lock uses `<T> OP_CHECKSEQUENCEVERIFY OP_DROP`, transaction version 2 or higher, and an input `nSequence` that encodes at least `T`, with bit 31 clear and the same type flag (bit 22, blocks or time) as `T` (BIP 68, BIP 112). | `refund(lock_id)` after `T` pays the stored `refund_to` | `refund` after `T` pays the stored `refund_to` account |
+| Refund leaf / function | `<T> OP_CHECKLOCKTIMEVERIFY OP_DROP <refund_key> OP_CHECKSIG`. The refund transaction sets `nLockTime` to the kind of `T` (height or time), at least `T` and at most the observed tip height, so it is final at once. A later value delays the refund, and a late refund of leg B breaks S11. A time lock uses exactly `T`, because the signer does not observe the median time past. The input `nSequence` is below `0xFFFFFFFF`, so CLTV can pass (BIP 65), and has the disable flag (bit 31) set, so BIP 68 adds no relative lock. Builders use `0xFFFFFFFD`. A relative lock uses `<T> OP_CHECKSEQUENCEVERIFY OP_DROP`, transaction version 2 or higher, an `nLockTime` that is final at once, and an input `nSequence` that encodes exactly `T`, with bit 31 clear and the same type flag (bit 22, blocks or time) as `T` (BIP 68, BIP 112). | `refund(lock_id)` after `T` pays the stored `refund_to` | `refund` after `T` pays the stored `refund_to` account |
 | Absolute timelock | `OP_CHECKLOCKTIMEVERIFY` (BIP 65): height below 500,000,000, else time against MTP (BIP 113) | `block.timestamp` | Clock sysvar `unix_timestamp` |
 | Relative timelock | `OP_CHECKSEQUENCEVERIFY` (BIP 112, BIP 68) | Not native | Not native |
 | Clock risk | MTP lags about 1 hour; block time can lead by up to 2 hours; block arrival is random (section 7.3) | L1: fixed 12-second slots. L2: the sequencer sets `block.timestamp` inside a window. At the time of writing, Arbitrum One permits about 24 hours behind and 1 hour ahead. OP Stack permits up to `max_sequencer_drift` (1,800 s) ahead of the L1 origin. On Arbitrum, `block.number` is an approximate L1 block number, so use time. A sequencer can also delay a transaction until forced inclusion through L1: about 24 hours on Arbitrum One, about 12 hours on OP Stack. The profile measures these values (section 8.8) and puts them into its drift and `D_confirm` (S11). | `unix_timestamp` is a stake-weighted estimate and can drift; slot time varies |
@@ -869,14 +875,14 @@ knowingly.
 | Raise the fee | Replace-by-fee (BIP 125) or child-pays-for-parent | Replace with the same nonce and a higher fee | No replacement. Resubmit with a new recent blockhash and a higher priority fee. |
 | Pinning resistance | TRUC (version 3) transactions (BIP 431) and pay-to-anchor outputs, subject to node policy | — | — |
 | Queue hazard | — | A stuck transaction with a lower nonce blocks the claim. Use a dedicated account per role, or clear the queue before the reveal. | A recent blockhash expires after about 150 blocks |
-| Prepared refund | Sign the refund transaction at lock time. It is a TRUC (version 3) transaction (BIP 431). It has `nLockTime = T` (same kind as `T`) and the input `nSequence` of the refund leaf row in section 8.2. It has one output to `refund_to` and one pay-to-anchor (P2A) output of 240 satoshis. A watchtower raises the fee through child-pays-for-parent. The child spends the P2A output and a confirmed coin of the watchtower, so it needs no signer key. The child is also a TRUC transaction and has at most 1,000 virtual bytes (BIP 431). Broadcast uses one-parent-one-child package relay. Under tier E1, a prepared claim has the same form (section 9). Every input of the lock transaction is segwit, so the lock txid cannot change. | Prefer a contract where anyone can trigger `refund` to the fixed `refund_to`. A watchtower then needs no key. | Prefer a permissionless refund instruction that pays the fixed `refund_to`. A watchtower then needs no key of the party. A pre-signed refund with a durable nonce is a fallback only. Each prepared transaction needs its own nonce account. Any other use of that nonce makes it invalid. A failed submission before `T` still advances the nonce and so destroys the prepared refund. Its priority fee is fixed at signing, so a fee raise (S19) needs a new signature. |
+| Prepared refund | Sign the refund transaction at lock time. It is a TRUC (version 3) transaction (BIP 431). For an absolute `T` it has `nLockTime = T` (same kind as `T`); for a relative `T` it has `nLockTime` 0. It has the input `nSequence` of the refund leaf row in section 8.2. It has one output to `refund_to` and one pay-to-anchor (P2A) output of 240 satoshis. A watchtower raises the fee through child-pays-for-parent. The child spends the P2A output and a confirmed coin of the watchtower, so it needs no signer key. The child is also a TRUC transaction and has at most 1,000 virtual bytes (BIP 431). Broadcast uses one-parent-one-child package relay. Under tier E1, a prepared claim has the same form (section 9). Every input of the lock transaction is segwit, so the lock txid cannot change. | Prefer a contract where anyone can trigger `refund` to the fixed `refund_to`. A watchtower then needs no key. | Prefer a permissionless refund instruction that pays the fixed `refund_to`. A watchtower then needs no key of the party. A pre-signed refund with a durable nonce is a fallback only. Each prepared transaction needs its own nonce account. Any other use of that nonce makes it invalid. A failed submission before `T` still advances the nonce and so destroys the prepared refund. Its priority fee is fixed at signing, so a fee raise (S19) needs a new signature. |
 | Private submission | Direct submission to miners, where available | Private relays | Direct submission to the leader, where available |
 
 ### 8.7 Signing interface
 
 | Chain | What the policy signer receives and signs |
 |---|---|
-| Bitcoin | A PSBT version 0 (BIP 174). Version 2 (BIP 370) is planned. The signer takes each prevout amount and `scriptPubKey` from its own node or verified chain facts, never from the PSBT. Own funding coins are Taproot (P2TR) outputs only. The BIP 341 sighash then commits to the amounts and `scriptPubKey`s of all inputs. A leaf spend uses the BIP 341 sighash with the BIP 342 extension (tapleaf hash). The signer computes every sighash itself. It never signs a sighash that the agent supplies. If the PSBT has a sighash type field with a value other than `SIGHASH_DEFAULT` (0x00, Taproot only) or `SIGHASH_ALL` (0x01), the signer rejects the PSBT and alerts the owner. BIP 174 requires a signer to fail on an unacceptable type. The signer signs with one of these two types only (S26). |
+| Bitcoin | A PSBT version 0 (BIP 174). Version 2 (BIP 370) is planned. The signer takes each prevout amount and `scriptPubKey` from its own node or verified chain facts, never from the PSBT. Own funding coins are Taproot (P2TR) outputs only. The BIP 341 sighash then commits to the amounts and `scriptPubKey`s of all inputs. A leaf spend uses the BIP 341 sighash with the BIP 342 extension (tapleaf hash). The signer computes every sighash itself. It never signs a sighash that the agent supplies. If the PSBT has a sighash type field with a value other than `SIGHASH_DEFAULT` (0x00, Taproot only) or `SIGHASH_ALL` (0x01), the signer rejects the PSBT and alerts the owner. BIP 174 requires a signer to fail on an unacceptable type. The signer signs with one of these two types only (S26). A lock or a claim has an `nLockTime` that is final at once (0, or a height at or below the observed tip) and no relative lock on any input (bit 31 of `nSequence` set). A claim that has to wait can miss the counterparty's refund. An observed lock passes S7 only with its output script and outpoint, because nothing else proves `H`, both leaf keys and `T` on chain. |
 | EVM | A typed transaction (EIP-2718, EIP-1559) with the EIP-155 chain id. Every `approve` names the pinned HTLC, or the pinned E2 wrapper, as spender, for the exact gross debit (S8). An EIP-2612 `permit` is acceptable only for the exact gross debit, with the same spender rule and a deadline no later than the warrant `valid_until`. A `permit` is an EIP-712 signature, not a transaction, so the `TxBinding` also contains its digest; its domain `chainId` and `verifyingContract` equal the chain and the token. Permit2 is not allowed in version 1. |
 | Solana | A transaction message. The signer resolves address lookup tables and decodes every instruction before it signs. |
 
@@ -1164,11 +1170,16 @@ tables do not list. No warrant is issued without a verified ACCEPT of the
 proposed terms (part of G5). A Bitcoin transaction pays at most the profile's
 worst-case fee. Solana lookup-table addresses come from chain facts.
 
+Commit `33f8cdf` fixes D1 and G3. For G3 it pins every Bitcoin timing field,
+not only the refund `nSequence`: a lock or a claim that has to wait is as unsafe
+as a late refund. It also requires an observed Bitcoin lock to carry its output
+script, and it denies an `Ask` that comes from an unknown price (section 5.4).
+
 **Defects.** These rows break a rule that version 0.2 also has. Fix them first.
 
 | Id | Spec | Code | Defect | Severity |
 |---|---|---|---|---|
-| D1 | S5, S6, 8.2 | `checks.rs:169-178`, `tx.rs:26-34`, `bitcoin.rs:190-196` | S5 and S6 compare only CAIP-10 accounts. On Bitcoin, the claim key and the refund key decide who can spend. No check compares them with the own keys. The initiator can put its own key in `keys.receiver` of leg A and still name the responder's address. The responder then locks leg B and loses both legs. | high |
+| D1 | S5, S6, 8.2 | `checks.rs:169-178`, `tx.rs:26-34`, `bitcoin.rs:190-196` | S5 and S6 compare only CAIP-10 accounts. On Bitcoin, the claim key and the refund key decide who can spend. No check compares them with the own keys. The initiator can put its own key in `keys.receiver` of leg A and still name the responder's address. The responder then locks leg B and loses both legs. | high, fixed in `33f8cdf` |
 | D2 | 6.1, S14 | `authorize.rs:289-292` | When the price of one leg is unknown, the notional takes the value of the other leg. The notional must be unknown. `NotionalAtMost` can then be true without a sure value, and S14 can choose a weaker finality band. | medium, fixed in `83e7e57` |
 | D3 | 8.4 Solana | `solana.rs:362-388` | `ProgramPin::matches` does not check the escrow account discriminator. S7 accepts any program-owned account at the expected address. | medium |
 | D4 | 4.1, 5 | `authorize.rs:126-133`, `authorize.rs:471-494` | The warrant does not record every fact that the evaluator read. `give_chain`, `take_chain` and the price reports are missing. Provenance is `None` for signed and chain facts. `resolve()` records `true`, not the observed value. A verifier cannot run the decision again from the warrant. | medium |
@@ -1184,7 +1195,7 @@ worst-case fee. Solana lookup-table addresses come from chain facts.
 |---|---|---|---|---|
 | G1 | 7.3, S11, 8.1 | `swap-verified/src/lib.rs:758-822`, `lib.rs:930-945`, `lib.rs:1064-1082`; `profile.rs:63-67`; `checks.rs:256-266` | The clock model uses a fixed block interval. Version 0.3 needs a real-time bound for n blocks at a stated failure probability, the Bitcoin median-time-past lag and a sequencer window. S11 and its proof do not include `D_refund(B)`. A Bitcoin leg B can then pass S11 with a gap that is too short. | high |
 | G2 | 3.2, S11, S13 | `checks.rs:246-254`, `authorize.rs:311-334`, `types.rs:85-87` | A relative timelock on leg B passes at accept. Only the responder's lock rejects it, after the initiator has locked leg A. `swap-core` does not compute the absolute leg A timelock from the observed confirmation. It uses the adapter value. | medium |
-| G3 | 8.2 refund leaf, 8.6 | `bitcoin.rs:599-602` | A refund input can have any `nSequence` other than `0xFFFFFFFF`. A value with bit 31 clear adds a BIP 68 relative delay. The refund of leg B can then come too late, and the initiator can claim leg B after it refunds leg A. Version 0.3 requires `0xFFFFFFFD`. | high |
+| G3 | 8.2 refund leaf, 8.6 | `bitcoin.rs:599-602` | A refund input can have any `nSequence` other than `0xFFFFFFFF`. A value with bit 31 clear adds a BIP 68 relative delay. The refund of leg B can then come too late, and the initiator can claim leg B after it refunds leg A. Version 0.3 requires `0xFFFFFFFD`. | high, fixed in `33f8cdf` |
 | G4 | 3.2 `lock_id`, 8.2, S10 | `types.rs:38-63`, `bitcoin.rs:105-115`, `evm.rs:215-217`, `solana.rs:16`, `solana.rs:348-349` | Locks are keyed by `swap_id`, not by `lock_id`. The two legs of a same-chain swap use the same key. The Bitcoin claim leaf has no `<lock_id> OP_DROP` prefix. Key fields are `keys.receiver` and `keys.refund`, not `claim_key` and `refund_key`. | high |
 | G5 | 3.5, S8 | `types.rs:100-113`, `authorize.rs:62-77`, `lib.rs` | No `negotiation` module exists: no message bodies, `intent_id`, transcript rules 1 to 5 or receiver checks. The hashed terms contain `swap_id` and party names, and they do not contain `hashlock`, `payout_basis` or `valid_until`. `swap_id` is an input, not the hash of the ACCEPT `inner_signed` bytes. | high |
 | G6 | 4.1 | `authorize.rs:191-192` | `valid_until` of `warrant(accept)` is not capped at the ACCEPT `expires_at`. | medium |
@@ -1225,8 +1236,8 @@ are closed, the code does not meet version 0.3.
    owner sign-off (tasks.md T0.4).
 4. **Clock bounds.** Who measures the block-interval and drift bounds for each
    profile, and how often.
-5. **Oracle.** The price source for each pair, and the result when the source is
-   missing: `Ask` or `Deny`.
+5. **Oracle.** The price source for each pair. Decided: a missing price gives
+   `Deny` (section 5.4).
 6. **Decision records.** Anchor `Deny` and `Ask` records sealed, so that only the
    party and its auditor can read them, or keep them local.
 7. **Tier E1 on Bitcoin.** MuSig2 or a BIP 340-compatible FROST variant, and the

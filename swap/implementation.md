@@ -300,7 +300,9 @@ Provenance = Signed { authority, signature_ok } | Chain { method, block_hash,
   the same block hash and the same value (spec 5.3). Otherwise it is unknown.
 - `evidence` is the weakest method over the chain facts that the action reads.
 - A price fact is unknown when it is older than `max_age` or its confidence
-  interval is wider than `max_conf_bps` (spec 5.4).
+  interval is wider than `max_conf_bps` (spec 5.4). When `decide` returns `Ask`
+  and the rule reads an unknown notional or price deviation, the pipeline
+  denies with `PRICE_UNKNOWN` (spec 5.4, decided after W2).
 - `notional` rounds up to whole units of the reference currency.
 - Ledger facts are unknown when the ledger counter is behind the last
   persisted counter (S25).
@@ -343,7 +345,8 @@ runtime state as an input value and check it.
 The rows describe the code, which follows spec version 0.2. Version 0.3
 changes these rows (planned, spec 13.4): S4 becomes an operational duty of
 `swap-signer`. Hashlock reuse moves to S10 and forbidden flags move to S9
-(G24). S5 and S6 compare the Bitcoin claim and refund keys (D1). S8 checks
+(G24). S5 and S6 compare the Bitcoin claim and refund keys (D1, done in
+`33f8cdf`). S8 checks
 `payout_basis` (G5). S10 checks `lock_id` and consumed counterparty locks (G4,
 G14). S15 uses earmarks (G16). S22 keeps the policy hash (D9). S23 allows
 `"structural"` for exits and needs `owner_approval` for `human-review` (G7).
@@ -387,7 +390,7 @@ profile clock follows G1, and `swap_id_binding` becomes `lock_id_binding`
 
 | Family | Input | Accepted shape |
 |---|---|---|
-| Bitcoin | PSBT version 0 | Inputs: own coins (witness UTXO script in the own set). Outputs: exactly one HTLC output with the derived `scriptPubKey` and the leg amount, plus at most one change output to an own script. Sighash type absent, `0x00` or `0x01`. Fee (input value minus output value) at most the profile's worst-case fee of the action. |
+| Bitcoin | PSBT version 0 | Inputs: own coins (witness UTXO script in the own set). Outputs: exactly one HTLC output with the derived `scriptPubKey` and the leg amount, plus at most one change output to an own script. Sighash type absent, `0x00` or `0x01`. Fee (input value minus output value) at most the profile's worst-case fee of the action. No signed transaction waits: a lock or a claim has an `nLockTime` of 0 or at most the observed tip and no relative lock (bit 31 of every `nSequence` set); a refund follows spec 8.2. An observed lock passes S7 only with its output script and outpoint. |
 | EVM | Unsigned EIP-1559 transaction | `chain_id` equals the leg chain; empty access list. Lock: `to` = pinned HTLC; native: `value` = amount; token: `value` = 0. Approve: `to` = token, `approve(htlc, gross_debit)`. Claim and refund calls as in the reference ABI. |
 | Solana | Legacy or version 0 message | Every instruction's program is allowed for the mode (spec 4.2 with the fixes). Compute budget: only unit limit and unit price. System: only `AdvanceNonceAccount`, first, pinned accounts, durable-nonce mode only. Ed25519: E2 mode only. Lookup-table addresses come from tables observed on the chain, by table address and index. The HTLC instruction has exactly the reference accounts, in order, with their signer and writable flags. |
 
@@ -435,7 +438,10 @@ authorize(request, context) →
   no verified ACCEPT of the proposed terms — entry: Deny record; exit: Halt
   entry action:  checks (S1–S15, S20–S25 as they apply) — fail → Deny record
                  facts → decide(rule, facts) — Allow → SwapWarrant
-                                               Ask   → Ask record
+                                               Ask   → Ask record, or Deny
+                                                       (PRICE_UNKNOWN) when
+                                                       the rule reads an
+                                                       unknown price value
                                                Deny  → Deny record
   exit action:   structural checks only — fail → Halt (stop and alert)
                  otherwise → SwapWarrant with reasons ["EXIT_ACTION"],
