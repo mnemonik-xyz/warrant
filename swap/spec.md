@@ -1069,12 +1069,12 @@ holds a key or funds.
 | Translation of the owner's intent into a rule tree | Assumed | The owner reviews and approves the exact rule tree |
 
 Status on 2026-10-07: the evaluator, the timeout arithmetic and their proofs
-exist (`swap-verified`), and so do the safety checks S1 to S25, the chain
-profiles and the transaction decoders, with their tests (`swap-core`). They
-implement version 0.2 of this specification; section 13.4 lists the later
-requirements that they do not implement yet. mnemonik-xyz/policy-execution#8 adds the n-block clock
-model, `D_refund(B)` in S11 and S27. The proof covers the evaluator and
-the arithmetic only. See [implementation.md](implementation.md) section 5 for the
+exist (`swap-verified`), and so do the safety checks S1 to S25 and S27, the
+chain profiles and the transaction decoders, with their tests (`swap-core`).
+They implement version 0.2 of this specification, plus the n-block clock model,
+`D_refund(B)` in S11 and S27 from mnemonik-xyz/policy-execution#8. Section 13.4
+lists the later requirements that they do not implement yet. The proof covers
+the evaluator and the arithmetic only. See [implementation.md](implementation.md) section 5 for the
 results.
 
 ---
@@ -1095,8 +1095,9 @@ results.
 | `swap-core` (`warrant-swap-core`) | Facts, checks, profiles, decoders, warrant payload | `swap-verified`, `serde`, `serde_json`, `sha2`, `sha3`, `blake3`, `k256`, `curve25519-dalek`, `bs58`, `rand_core`, `zeroize` |
 
 The swap crates are on `policy-execution` `main`. mnemonik-xyz/policy-execution#7
-merged them as commit `2e19118`, which the submodule pins. That commit contains
-the review fixes `83e7e57` and `33f8cdf` of the pull request branch. The swap
+merged them as commit `2e19118`. That commit contains the review fixes `83e7e57`
+and `33f8cdf` of the pull request branch. mnemonik-xyz/policy-execution#8 added
+the clock model and S27 as commit `e0a4285`, which the submodule pins. The swap
 crates change no invoice crate and no guest image id.
 
 The evaluator is already separate from the zkVM code. `core` and `verified` do
@@ -1116,7 +1117,7 @@ Do not add swap atoms to the existing `Rule`. Add three crates:
 | Crate | Contents | Depends on | Does not depend on |
 |---|---|---|---|
 | `swap-verified` | `SwapRule`, `SwapFacts3`, `evaluate3`, timeout arithmetic, Verus proofs | `vstd`, optional `serde` | `k256`, RISC Zero, Mnemonik |
-| `swap-core` | Chain profile interface, fact builder, pure check functions for S1 to S3, S5 to S15, S18 and S20 to S24 over facts and state that the signer supplies, input checks for S4, S16, S17 and S19 over runtime state that the signer supplies, warrant payload (JCS), own decoders for PSBT, EIP-1559 and Solana messages. Planned (13.4): negotiation message types, intent and transcript rules (section 3.5) and S26 as its own check (S26 is enforced inside the Bitcoin decoder today). S27 is in mnemonik-xyz/policy-execution#8. | `swap-verified`, `sha2`, `sha3`, `blake3`, `k256`, `curve25519-dalek`, `bs58` | RISC Zero, Mnemonik, network clients |
+| `swap-core` | Chain profile interface, fact builder, pure check functions for S1 to S3, S5 to S15, S18 and S20 to S24 over facts and state that the signer supplies, input checks for S4, S16, S17 and S19 over runtime state that the signer supplies, warrant payload (JCS), own decoders for PSBT, EIP-1559 and Solana messages. Planned (13.4): negotiation message types, intent and transcript rules (section 3.5) and S26 as its own check (S26 is enforced inside the Bitcoin decoder today). S27 exists since mnemonik-xyz/policy-execution#8. | `swap-verified`, `sha2`, `sha3`, `blake3`, `k256`, `curve25519-dalek`, `bs58` | RISC Zero, Mnemonik, network clients |
 | `swap-signer` | The policy signer binary: keys, watchers, ledger, RPC and node clients, Ask queue, sealing and opening negotiation messages, the receiver checks of section 3.5 with a durable nonce store, and anchoring through `mnemonic-core`; operational duties S4, S16, S17, S19 and S25; durable state for S10, S21 and S22 | `swap-core`, `mnemonic-core` (COSE, sealed A2A, anchoring), KMS adapters | RISC Zero |
 
 Rules for the layout:
@@ -1178,7 +1179,7 @@ not only the refund `nSequence`: a lock or a claim that has to wait is as unsafe
 as a late refund. It also requires an observed Bitcoin lock to carry its output
 script, and it denies an `Ask` that comes from an unknown price (section 5.4).
 
-mnemonik-xyz/policy-execution#8 (open) fixes D5, D6, G1 and G15. The verified clock model bounds
+mnemonik-xyz/policy-execution#8, merged as `e0a4285`, fixes D5, D6, G1 and G15. The verified clock model bounds
 the real time of `n` blocks at a stated failure probability, adds the settle
 blocks of a time lock and adds `D_refund(B)` to S11. Verus verifies it (52
 verified, 0 errors; 35 of 35 mutations rejected). S27 runs before lock and

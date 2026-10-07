@@ -265,7 +265,7 @@ swapped.
 | `jcs` | RFC 8785 canonical JSON for the values that warrants use |
 | `dsl` | JSON mini-DSL → `SwapRule`; `SwapPolicy`; `validate_policy` |
 | `facts` | Observations with provenance; quorum; oracle; fact builder → `SwapFacts3` |
-| `checks` | Obligatory checks S1 to S25 of spec version 0.2 with fixed reason codes. The Bitcoin decoder enforces S26. S27 is in mnemonik-xyz/policy-execution#8 (G15). |
+| `checks` | Obligatory checks S1 to S25 of spec version 0.2 with fixed reason codes, and S27 (G15, mnemonik-xyz/policy-execution#8). The Bitcoin decoder enforces S26. |
 | `profile` | `ChainProfile` parameters; Bitcoin, EVM and Solana profiles |
 | `tx` | Transaction decoders and intent matching (S24) |
 | `warrant` | `SwapWarrant`, `DecisionRecord`, `TxBinding`, payload bytes, hash chain |
@@ -501,7 +501,8 @@ tests passed (61 unit, 29 pipeline); `check_mutations.py` caught 18 of 18
 disabled checks; the `wasm32-unknown-unknown` build succeeds.
 
 n-block clock model, `D_refund(B)` and S27 in mnemonik-xyz/policy-execution#8
-(commit `e432292`, 2026-10-07): Verus 52 verified, 0 errors, and 35 of 35
+(commits `e432292` and `19768f0`, 2026-10-07, merged into `main` as `e0a4285`):
+Verus 52 verified, 0 errors, and 35 of 35
 mutations rejected; 94 `swap-core` tests passed (64 unit, 30 pipeline);
 `check_mutations.py` caught 19 of 19 disabled checks; the
 `wasm32-unknown-unknown` build succeeds. The table below gives the first results
