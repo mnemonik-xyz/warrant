@@ -1,6 +1,9 @@
 # Ledger integration: implementation plan
 
-Companion to [spec.md](spec.md) version 0.2. This document gives the build
+Companion to [spec.md](spec.md) version 0.2. Status 2026-10-08: phases 0 and 1
+are implemented in `policy-execution` (`ids/`, `connectors/ledger/`), with 4 Rust
+tests, 12 Python tests and an end-to-end run on Anvil
+(`scripts/invoice-demo.py --signed-only --ledger`, `bean-check` passes). This document gives the build
 details for phase 0 (`warrant-ids`), phase 1 (connector core and beancount) and
 phase 2b (Odoo 18 Community). All paths are in `policy-execution` unless stated.
 
@@ -34,13 +37,15 @@ Commands. Every hash is printed as `0x` followed by 64 lowercase hex digits.
   "poRef": "PO-7",
   "poId": "0x…",
   "obligationId": "0x…",
-  "currency": "USD",
+  "usd": true,
   "payable": 1234560000,
   "totalsConsistent": true
 }
 ```
 
-`payable` is in USDC base units, as `InvoiceFacts.payable`, or `null`. `poRef`
+`payable` is in USDC base units, as `InvoiceFacts.payable`, or `null`. `usd`
+mirrors `InvoiceFacts.usd`. The [multi-currency change](../multi-currency/spec.md)
+replaces it with `currency`. `poRef`
 and `poId` are `null` if the document cites no order. A document that
 `parse_invoice` denies gives exit code 2 and a message on standard error.
 
@@ -70,8 +75,8 @@ connectors/ledger/
 │   ├── ids.py                # subprocess calls to warrant-ids
 │   ├── intake.py             # intake records from UBL documents
 │   ├── match.py              # spec section 7
-│   ├── report.py             # exceptions report, spec section 10
-│   ├── checks.py             # self-checks, spec section 9
+│   ├── sync.py               # confirmed-log sync and manual rescan
+│   ├── report.py             # exceptions report (spec section 10) and self-checks (section 9)
 │   ├── adapters/
 │   │   ├── base.py           # interface, spec section 6
 │   │   └── beancount.py      # text writer

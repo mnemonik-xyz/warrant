@@ -1,7 +1,7 @@
 # Warrant ledger integration: architecture specification
 
-Version 0.2 · 2026-10-08 · Draft. Status: design only. Phases 0 and 1 are in
-progress. [implementation.md](implementation.md) gives the build details;
+Version 0.2 · 2026-10-08 · Draft. Status: phases 0 and 1 are implemented and
+tested. [implementation.md](implementation.md) gives the build details;
 [tasks.md](tasks.md) tracks the work.
 
 Decisions of 2026-10-08:
