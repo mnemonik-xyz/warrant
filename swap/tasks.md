@@ -103,8 +103,8 @@ Gaps:
 - [x] G3 No signed Bitcoin transaction waits: lock and claim final now; refund
       `nLockTime` from `T` up to the tip, no relative lock (policy-execution
       `33f8cdf`).
-- [ ] G4 `lock_id` keys every lock; `<lock_id> OP_DROP` claim leaf; fields
-      `claim_key` and `refund_key`.
+- [x] G4 `lock_id` keys every lock; `<lock_id> OP_DROP` claim leaf; fields
+      `claim_key` and `refund_key` (mnemonik-xyz/policy-execution#10).
 - [ ] G5 `negotiation` module: bodies, `intent_id`, `terms_hash`, transcript
       rules 1 to 5, receiver checks; `swap_id` from the ACCEPT; `hashlock`,
       `payout_basis` and `valid_until` in the terms.
@@ -127,8 +127,10 @@ Gaps:
       a proxy and its implementation.
 - [ ] G19 Identity atoms from a Mnemonik agent record resolved to `active`.
       Needs the Mnemonik record resolver (planned).
-- [ ] G20 EVM beacon, legacy-slot and diamond proxies in S7.
-- [ ] G21 Solana loader, ProgramData, code hash and escrow token account in S7.
+- [x] G20 EVM beacon, legacy-slot and diamond proxies in S7
+      (mnemonik-xyz/policy-execution#10).
+- [x] G21 Solana loader, ProgramData, code hash and escrow token account in S7
+      (mnemonik-xyz/policy-execution#10).
 - [ ] G22 Solana instruction table of spec 4.2: compute bounds, associated
       token account creates, token program, nonce scope. HTLC accounts: done
       (policy-execution `83e7e57`).

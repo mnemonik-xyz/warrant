@@ -334,7 +334,7 @@ The warrant binds the exact transaction that the signer signs:
 | Chain family | `TxBinding` content |
 |---|---|
 | Bitcoin | Unsigned transaction id of the PSBT and every sighash that the signer produces. For `warrant(lock)`, also the txid and sighash of the prepared refund (section 8.6). |
-| EVM | EIP-1559 signing hash `keccak256(0x02 ‖ rlp([chain_id, nonce, max_priority_fee_per_gas, max_fee_per_gas, gas_limit, to, value, data, access_list]))`; the access list is empty. The EIP-712 digest of an EIP-2612 `permit`, when one replaces the `approve` (section 8.7). Under tier E1: the EIP-712 `SafeTx` hash (Safe nonce included, `operation` = CALL) or the ERC-4337 `userOpHash`. |
+| EVM | EIP-1559 signing hash `keccak256(0x02 ‖ rlp([chain_id, nonce, max_priority_fee_per_gas, max_fee_per_gas, gas_limit, to, value, data, access_list]))`; the access list is empty. The EIP-712 digest of an EIP-2612 `permit`, when one replaces the `approve` (section 8.7). Under tier E1: the EIP-712 `SafeTx` hash (Safe nonce included, `operation` = CALL) or the ERC-4337 `userOpHash`. A lock also binds `signer`, the leg's `sender`: the contract keys the lock by `msg.sender`, and the signing hash does not cover it. The policy signer signs every hash of a lock with that key only. |
 | Solana | Hash of the serialized transaction message. Under tier E1: the hash of the Squads vault transaction message that the proposal executes. |
 
 **Fee raises.** A fee raise (S19) changes the transaction and its hash. Each
@@ -762,7 +762,7 @@ can remove a lock that a party already relied on.
 
 | ID | Check | Loss it prevents |
 |---|---|---|
-| S20 | The warrant binds chain id, contract, swap id, nonce and validity window | Replay on another chain, contract or swap |
+| S20 | The warrant binds chain id, contract, swap id, the `lock_id` of the leg, nonce and validity window | Replay on another chain, contract or swap |
 | S21 | The signer consumes each warrant once | Double use of one authorization |
 | S22 | The policy version only increases. The signer rejects an older policy hash. | Rollback to a weaker policy |
 | S23 | For an entry warrant, the `evaluator_id` equals the pinned evaluator build, or `human-review`. `human-review` needs a valid `owner_approval` by the owner key that the policy pins, over the complete warrant payload without the `owner_approval` field (section 4.1), including `nonce`, `fee_ceiling`, `policy_hash` and `prev_warrant`. An owner approval turns only `Ask` into `Allow`. It never overrides `Deny` or a failed section 7 check. An exit warrant has `class: exit` and `evaluator_id: structural`; a verifier never re-runs the policy for it. | A changed evaluator; a forged or replayed owner approval |
@@ -791,7 +791,7 @@ profile hash in the policy. A profile supplies:
 | Transaction decoder | Yes | S24 |
 | Fee model, worst-case fee and fee-raising method | Yes | S15, S19 |
 | Prepared refund method or permissionless refund | Yes, one of the two | S17 |
-| Swap id binding in the lock | Useful | S10 |
+| `lock_id` binding in the lock | Useful | S10 |
 | Cooperative key-path spend | Planned (not in version 1) | Privacy and lower fees. Version 1 locks have no usable key path. |
 | Private transaction submission | Useful | Less griefing around the reveal |
 | On-chain signature check for warrants | Useful | Enforcement tier E2 (section 9) |
@@ -811,6 +811,7 @@ profile hash in the policy. A profile supplies:
 | Clock risk | MTP lags about 1 hour; block time can lead by up to 2 hours; block arrival is random (section 7.3) | L1: fixed 12-second slots. L2: the sequencer sets `block.timestamp` inside a window. At the time of writing, Arbitrum One permits about 24 hours behind and 1 hour ahead. OP Stack permits up to `max_sequencer_drift` (1,800 s) ahead of the L1 origin. On Arbitrum, `block.number` is an approximate L1 block number, so use time. A sequencer can also delay a transaction until forced inclusion through L1: about 24 hours on Arbitrum One, about 12 hours on OP Stack. The profile measures these values (section 8.8) and puts them into its drift and `D_confirm` (S11). | `unix_timestamp` is a stake-weighted estimate and can drift; slot time varies |
 | Internal key | The BIP 341 unspendable point (`NUMS`). Version 1 has no key-path spend. | — | — |
 | Swap binding | The claim leaf starts with `<lock_id> OP_DROP`, so the output key commits to the lock. `H` alone does not bind the swap: the initiator chooses `H`, and the responder cannot verify S4. S10 adds a consumed set of outpoints and hashlocks. | Contract storage keyed by `lock_id` | PDA seeds include `lock_id` |
+| `sender` in `lock_id` (section 3.2) | The 32-byte x-only `refund_key` of the leg. A Taproot output does not see the funding address. | The 20-byte address that calls `lock` (`msg.sender`) | The 32-byte key of the account that signs the lock instruction |
 
 `lock_id` includes the funding sender (section 3.2). The two legs of one swap can
 therefore use the same contract on the same chain, and a third party cannot take
@@ -831,8 +832,8 @@ the key first.
 | Chain | How the signer proves that the lock is the pinned HTLC |
 |---|---|
 | Bitcoin | Re-derive the Taproot output from the template, `lock_id`, `H`, both leaf keys, `T`, the leaf version `0xc0` and the internal key. The internal key must be the BIP 341 point `NUMS`, or `NUMS + r·G` with `r` disclosed to the verifier. Any other internal key gives the funder a key-path spend that bypasses both leaves, so the verifier rejects the lock. Compare the derived `scriptPubKey` bytes (`OP_1 <32-byte output key>`) with the observed output, and check the amount (S8). The bech32m address (BIP 350) is only the display form. |
-| EVM | The address is in the pinned set and `EXTCODEHASH` (EIP-1052) equals the pinned code hash. Reject a proxy of any pattern (EIP-1967, legacy slots such as `org.zeppelinos.proxy.implementation`, beacon, diamond) unless the policy pins its admin and implementation. |
-| Solana | The program id is in the pinned set. The program account is owned by the upgradeable loader (`BPFLoaderUpgradeab1e11111111111111111111111`) and points to its `ProgramData` account. The upgrade authority in `ProgramData` is none or a pinned account. The hash of the program bytes after the 45-byte `ProgramData` header, without trailing zero padding, equals the pinned code hash. The signer rejects a program under any other loader unless the profile defines the same checks for it. The escrow account is the PDA from the expected seeds, is owned by the program and has the expected discriminator. For a token leg, the escrow token account is owned by the pinned token program, has the leg mint, and has the escrow PDA as its owner. |
+| EVM | The address is in the pinned set and `EXTCODEHASH` (EIP-1052) equals the pinned code hash. At the same block, the signer reads six storage slots of the address: the EIP-1967 implementation, admin and beacon slots, the legacy slots `org.zeppelinos.proxy.implementation` and `org.zeppelinos.proxy.admin`, and the EIP-1822 slot `PROXIABLE`. It also calls `facetAddresses()`, the loupe function of every EIP-2535 diamond, and the call must revert. Version 1 accepts one proxy pattern: EIP-1967 with an address in the implementation slot and in the admin slot. The policy must pin that admin, that implementation and the `EXTCODEHASH` of the implementation. A beacon, a legacy slot, a diamond, an EIP-1967 proxy without an admin (UUPS) or a slot value that is not an address fails S7 for every pin. These reads cannot find a proxy that keeps its target in another slot, so the owner pins only the code hash of reviewed code. |
+| Solana | The program id is in the pinned set. The program account is owned by the upgradeable loader (`BPFLoaderUpgradeab1e11111111111111111111111`) and points to its `ProgramData` account. The upgrade authority in `ProgramData` is none or a pinned account. The `ProgramData` account is the loader PDA of the seed `[program id]`, and the loader owns it. The SHA-256 hash of the program bytes after the 45-byte `ProgramData` header, without trailing zero bytes, equals the pinned code hash (the value of `solana-verify get-program-hash`). The signer rejects a program under any other loader unless the profile defines the same checks for it. The escrow account is the PDA from the expected seeds, is owned by the program and has the expected discriminator. For a token leg whose lock exists, the escrow token account (the escrow PDA's associated token account for the leg mint) is owned by the token program of the leg mint (SPL Token or Token-2022, read from the chain), has the leg mint, and has the escrow PDA as its owner. |
 
 ### 8.5 Asset identity and risk flags
 
@@ -1073,7 +1074,8 @@ exist (`swap-verified`), and so do the safety checks S1 to S25 and S27, the
 chain profiles and the transaction decoders, with their tests (`swap-core`).
 They implement version 0.2 of this specification, plus the n-block clock model,
 `D_refund(B)` in S11 and S27 from mnemonik-xyz/policy-execution#8, and the
-fixes of D3, D7, D8, D9 and G2 from mnemonik-xyz/policy-execution#9. Section 13.4
+fixes of D3, D7, D8, D9 and G2 from mnemonik-xyz/policy-execution#9.
+mnemonik-xyz/policy-execution#10 fixes G4, G20 and G21. Section 13.4
 lists the later requirements that they do not implement yet. The proof covers
 the evaluator and the arithmetic only. See [implementation.md](implementation.md) section 5 for the
 results.
@@ -1099,8 +1101,9 @@ The swap crates are on `policy-execution` `main`. mnemonik-xyz/policy-execution#
 merged them as commit `2e19118`. That commit contains the review fixes `83e7e57`
 and `33f8cdf` of the pull request branch. mnemonik-xyz/policy-execution#8 added
 the clock model and S27 as commit `e0a4285`. mnemonik-xyz/policy-execution#9
-added the fixes of D3, D7, D8, D9 and G2 as commit `89308bc`, which the
-submodule pins. The swap
+added the fixes of D3, D7, D8, D9 and G2 as commit `89308bc`.
+mnemonik-xyz/policy-execution#10 added G4, G20 and G21 as commit `aeccac9`,
+which the submodule pins. The swap
 crates change no invoice crate and no guest image id.
 
 The evaluator is already separate from the zkVM code. `core` and `verified` do
@@ -1204,6 +1207,26 @@ mnemonik-xyz/policy-execution#9, merged as `89308bc`, fixes D3, D7, D8, D9 and G
   next block while no lock exists, never from the adapter value. This covers
   relative block counts. A relative time on leg A stays unsupported (G25).
 
+mnemonik-xyz/policy-execution#10, merged as `aeccac9`, fixes G4, G20 and G21:
+
+- **G4.** Each lock carries `lock_id`. S10 checks it at every action
+  (`S10_LOCK_ID`), and an exit halts on it. The sender bytes are in section
+  8.2. The Bitcoin claim leaf starts with `<lock_id> OP_DROP`; the template id
+  becomes `warrant-htlc-tr-v2`. The flat `claim_key` and `refund_key` replace
+  `keys`. EVM calls are `lock(swapId, leg, …)`, `claim(lockId, s)` and
+  `refund(lockId)`. The Solana escrow seeds are `[b"htlc", lock_id]`. An entry
+  action needs `lock_id_binding` and an own EVM or Solana funding sender. S20
+  binds `lock_id`.
+- **G20.** EVM S7 also reads the EIP-1967 beacon slot, the two ZeppelinOS slots
+  and the EIP-1822 slot, and calls the diamond loupe `facetAddresses()`. Only a
+  pinned EIP-1967 proxy passes.
+- **G21.** Solana S7 checks the upgradeable loader, the `ProgramData` account
+  and its upgrade authority, the SHA-256 code hash and, once a token lock
+  exists, the escrow token account. A policy pins each contract once per chain.
+
+These changes alter the terms, the policy pins and the profile hashes. Every
+policy needs a new text with a higher `version`.
+
 **Defects.** These rows break a rule that version 0.2 also has. Fix them first.
 
 | Id | Spec | Code | Defect | Severity |
@@ -1225,7 +1248,7 @@ mnemonik-xyz/policy-execution#9, merged as `89308bc`, fixes D3, D7, D8, D9 and G
 | G1 | 7.3, S11, 8.1 | `swap-verified/src/lib.rs:758-822`, `lib.rs:930-945`, `lib.rs:1064-1082`; `profile.rs:63-67`; `checks.rs:256-266` | The clock model uses a fixed block interval. Version 0.3 needs a real-time bound for n blocks at a stated failure probability, the Bitcoin median-time-past lag and a sequencer window. S11 and its proof do not include `D_refund(B)`. A Bitcoin leg B can then pass S11 with a gap that is too short. | high, fixed in mnemonik-xyz/policy-execution#8 |
 | G2 | 3.2, S11, S13 | `checks.rs:246-254`, `authorize.rs:311-334`, `types.rs:85-87` | A relative timelock on leg B passes at accept. Only the responder's lock rejects it, after the initiator has locked leg A. `swap-core` does not compute the absolute leg A timelock from the observed confirmation. It uses the adapter value. | medium, fixed in mnemonik-xyz/policy-execution#9 for relative block counts; relative seconds: G25 |
 | G3 | 8.2 refund leaf, 8.6 | `bitcoin.rs:599-602` | A refund input can have any `nSequence` other than `0xFFFFFFFF`. A value with bit 31 clear adds a BIP 68 relative delay. The refund of leg B can then come too late, and the initiator can claim leg B after it refunds leg A. Version 0.3 requires `0xFFFFFFFD`. | high, fixed in `33f8cdf` |
-| G4 | 3.2 `lock_id`, 8.2, S10 | `types.rs:38-63`, `bitcoin.rs:105-115`, `evm.rs:215-217`, `solana.rs:16`, `solana.rs:348-349` | Locks are keyed by `swap_id`, not by `lock_id`. The two legs of a same-chain swap use the same key. The Bitcoin claim leaf has no `<lock_id> OP_DROP` prefix. Key fields are `keys.receiver` and `keys.refund`, not `claim_key` and `refund_key`. | high |
+| G4 | 3.2 `lock_id`, 8.2, S10 | `types.rs:38-63`, `bitcoin.rs:105-115`, `evm.rs:215-217`, `solana.rs:16`, `solana.rs:348-349` | Locks are keyed by `swap_id`, not by `lock_id`. The two legs of a same-chain swap use the same key. The Bitcoin claim leaf has no `<lock_id> OP_DROP` prefix. Key fields are `keys.receiver` and `keys.refund`, not `claim_key` and `refund_key`. | high, fixed in mnemonik-xyz/policy-execution#10 |
 | G5 | 3.5, S8 | `types.rs:100-113`, `authorize.rs:62-77`, `lib.rs` | No `negotiation` module exists: no message bodies, `intent_id`, transcript rules 1 to 5 or receiver checks. The hashed terms contain `swap_id` and party names, and they do not contain `hashlock`, `payout_basis` or `valid_until`. `swap_id` is an input, not the hash of the ACCEPT `inner_signed` bytes. | high |
 | G6 | 4.1 | `authorize.rs:191-192` | `valid_until` of `warrant(accept)` is not capped at the ACCEPT `expires_at`. | medium |
 | G7 | 4.1, S23 | `warrant.rs:17-20`, `warrant.rs:65-93`, `authorize.rs:160-196` | The warrant has no `class`, `fee_ceiling`, `owner_approval`, `replaces` or `onchain_digest` field. Exit warrants name an evaluator build, not `"structural"`, and their reasons do not list the structural checks. | high |
@@ -1241,8 +1264,8 @@ mnemonik-xyz/policy-execution#9, merged as `89308bc`, fixes D3, D7, D8, D9 and G
 | G17 | 6.2, 6.3 | `dsl.rs:218-225`, `swap-verified/src/lib.rs:35-36` | `period_notional_at_most` takes `[period, amount]`. The DSL rejects the three-element form and the example policy of section 6.3. | high |
 | G18 | 8.5, 6.2 | `swap-verified/src/lib.rs:47`, `lib.rs:373-376`, `types.rs:201-227`, `checks.rs:99-110` | A risk flag cannot be unknown on its own. `ui_multiplier` is missing. No EVM reader of the reviewed list exists for a proxy and its implementation. | high |
 | G19 | 5.1, 6.2 | `authorize.rs:22-39`, `authorize.rs:421-431` | Identity is an authority credential, not a Mnemonik agent record resolved to `active`. `CounterpartyNotListed` can be true without an established identity, and it does not check the leg accounts. Needs the Mnemonik record resolver (planned). | medium |
-| G20 | 8.4 EVM | `evm.rs:318-325`, `evm.rs:357-364` | Only EIP-1967 implementation and admin slots are read. A beacon, legacy-slot or diamond proxy passes S7. | medium |
-| G21 | 8.4 Solana | `solana.rs:352-360`, `solana.rs:378-382` | No loader owner, ProgramData address or code hash check. No check of the escrow token account. A program under another loader passes. | medium |
+| G20 | 8.4 EVM | `evm.rs:318-325`, `evm.rs:357-364` | Only EIP-1967 implementation and admin slots are read. A beacon, legacy-slot or diamond proxy passes S7. | medium, fixed in mnemonik-xyz/policy-execution#10 |
+| G21 | 8.4 Solana | `solana.rs:352-360`, `solana.rs:378-382` | No loader owner, ProgramData address or code hash check. No check of the escrow token account. A program under another loader passes. | medium, fixed in mnemonik-xyz/policy-execution#10 |
 | G22 | 4.2 Solana | `solana.rs:223-268`, `solana.rs:189-195`, `authorize.rs:349-369` | The decoder does not check compute bounds. (`83e7e57` adds the HTLC instruction account check.) It accepts any associated token account create. It does not bind the token program to the asset. It allows a durable nonce in every message, not only in the prepared refund. | medium |
 | G23 | 4.3, 9 E2 | `solana.rs:183-207` | No builder of the Ed25519 message `warrant.swap.v1/ed25519-ix` with the on-chain warrant digest. | low |
 | G24 | S9, S10, S26, S27 | `checks.rs:47-52`, `checks.rs:163-165`, `checks.rs:226-235` | Reason codes use version 0.2 numbers: `S4_HASHLOCK_REUSED` and `S8_FORBIDDEN_RISK_FLAG`. No `S26` code exists (`S27_RECEIVER` exists since mnemonik-xyz/policy-execution#8). | low |

@@ -52,6 +52,13 @@ Other choices that this document makes, all inside the spec's freedom:
 - **Validity windows** of warrants use the signer's real time, for every action
   (spec 4.1). A verifier checks the window at its own real time. It allows a
   stated skew of at most 60 seconds (`MAX_SKEW_SECS`).
+- **Lock keys.** Each lock carries `lock_id = sha256(swap_id ‖ leg ‖ sender)`
+  (spec 3.2), with the leg byte `0x41` or `0x42`. The sender bytes are the
+  20-byte EVM address that calls `lock`, the 32-byte Solana key that signs the
+  lock, and on Bitcoin the 32-byte `refund_key`, because a Taproot output sees
+  no sender. S10 checks `lock_id` at every action, exits included. An entry
+  action needs `lock_id_binding` on both profiles and, on EVM and Solana, an
+  own funding sender (G4, done in mnemonik-xyz/policy-execution#10).
 - **Reference HTLC interfaces.** The EVM and Solana decoders check calls
   against a reference interface (section 4.6). A venue adapter (W4) maps a
   different contract onto the same intent.
@@ -353,7 +360,7 @@ runtime state as an input value and check it.
 | S7 | observed contract, policy pins | identity equals a pinned identity (profile derivation) |
 | S8 | terms, observed lock, risk flags | amount, asset and decimals equal; net amount for `transfer_fee`; forbidden flags deny |
 | S9 | asset fact | provenance is `Chain` |
-| S10 | lock, consumed swap ids | `swap_id` bound where the profile supports it; not consumed |
+| S10 | terms, profiles, own accounts, observed lock, consumed swap ids | each `lock_id` equals sha256(swap_id ‖ leg ‖ sender) (`S10_LOCK_ID`); both profiles bind `lock_id` and the own EVM or Solana sender is own (`S10_LOCK_ID`, entry only); the observed lock has the agreed `lock_id` (`S10_LOCK_ID`); the locks carry the swap id of the terms, not consumed at accept (`S10_SWAP_ID`) |
 | S11 | timelocks, profiles | `s11_holds` |
 | S12 | `T_B`, profile | `s12_holds` (reveal only) |
 | S13 | initiator lock, planned `T_B` | S14, and S11 for the planned `T_B` with `T_A` from the terms and the observed confirmation; the adapter timelock must equal it (responder lock only) |
@@ -363,7 +370,7 @@ runtime state as an input value and check it.
 | S17 | profile, runtime state | prepared refund stored, or profile refund is permissionless |
 | S18 | action | exit actions never reach the evaluator |
 | S19 | profile | a fee-raising method exists |
-| S20 | warrant, verifier real time, stated skew | binds chain id, contract, swap id and nonce; `valid_after − skew ≤ now_real ≤ valid_until + skew`, skew at most 60 s; an inverted window is rejected |
+| S20 | warrant, verifier real time, stated skew | binds chain id, contract, swap id, `lock_id` and nonce; `valid_after − skew ≤ now_real ≤ valid_until + skew`, skew at most 60 s; an inverted window is rejected |
 | S21 | consumed warrants | warrant hash not consumed |
 | S22 | ledger | a higher version than the stored one, or the same version with the same policy hash; no stored policy passes |
 | S23 | policy, build | `evaluator_id` equals the pinned build id |
@@ -375,8 +382,8 @@ changes these rows (planned, spec 13.4): S4 becomes an operational duty of
 `swap-signer`. Hashlock reuse moves to S10 and forbidden flags move to S9
 (G24). S5 and S6 compare the Bitcoin claim and refund keys (D1, done in
 `33f8cdf`). S8 checks
-`payout_basis` (G5). S10 checks `lock_id` and consumed counterparty locks (G4,
-G14). S15 uses earmarks (G16). S22 keeps the policy hash with the version
+`payout_basis` (G5). S10 checks consumed counterparty locks (G14); the
+`lock_id` checks are done (G4, mnemonik-xyz/policy-execution#10). S15 uses earmarks (G16). S22 keeps the policy hash with the version
 (D9, done in mnemonik-xyz/policy-execution#9). S23 allows
 `"structural"` for exits and needs `owner_approval` for `human-review` (G7).
 S24 allows fee-only variants (G10). S26 gets its own reason code, and S27 is
@@ -389,34 +396,44 @@ ProfileParams {
   chain: CAIP-2, mainnet: bool, family: Bitcoin | Evm | Solana,
   clock: ClockBounds, finality: Confirmations(k by value band) | FinalizedTag,
   min_evidence: by value band, fee: { worst_lock, worst_claim, worst_refund, raise: method },
-  refund: Prepared | Permissionless, swap_id_binding: bool,
+  refund: Prepared | Permissionless, lock_id_binding: bool,
   template_enforces_len32: bool, profile_hash
 }
 ```
 
 Family details:
 
-- **Bitcoin.** Taproot HTLC (spec 8.2). Claim leaf
-  `OP_SIZE 32 OP_EQUALVERIFY OP_SHA256 <H> OP_EQUALVERIFY <receiver> OP_CHECKSIG`.
-  Refund leaf `<T> OP_CHECKLOCKTIMEVERIFY OP_DROP <refund> OP_CHECKSIG`.
+- **Bitcoin.** Taproot HTLC (spec 8.2), template `warrant-htlc-tr-v2`. Claim leaf
+  `<lock_id> OP_DROP OP_SIZE 32 OP_EQUALVERIFY OP_SHA256 <H> OP_EQUALVERIFY <claim_key> OP_CHECKSIG`.
+  Refund leaf `<T> OP_CHECKLOCKTIMEVERIFY OP_DROP <refund_key> OP_CHECKSIG`.
+  The `lock_id` sender bytes are the `refund_key`.
   Internal key: the BIP 341 NUMS point. `swap-core` derives the output key and
   the `scriptPubKey` itself with `k256` (S7). Tests compare it with
   `rust-bitcoin`.
-- **EVM.** Contract identity is the address plus the `EXTCODEHASH` fact; a
-  proxy fact (EIP-1967 slot set) fails S7 unless the policy pins it.
-- **Solana.** Contract identity is the program id plus the upgrade authority
-  fact; the escrow address must be the expected PDA. An observed lock needs an
+- **EVM.** Contract identity is the address plus the `EXTCODEHASH` fact.
+  `ContractFacts` also holds the words of six proxy slots (`evm::proxy_slot`)
+  and the result of the loupe call `facetAddresses()`. For an EIP-1967
+  implementation, it also holds that address and its `EXTCODEHASH`.
+  `ContractFacts::proxy` gives no proxy, EIP-1967 or unsupported. A pin without
+  `proxy` accepts no proxy. A pin with `proxy` accepts an EIP-1967 proxy with
+  that admin, implementation and `implementation_code_hash`. An unsupported
+  pattern fails S7 for every pin (G20, done in
+  mnemonik-xyz/policy-execution#10). The `lock_id` sender bytes are the address
+  that calls `lock`.
+- **Solana.** Contract identity is the program id, the upgradeable loader, the
+  `ProgramData` PDA of `[program id]` and its upgrade authority, and the code
+  hash (SHA-256 of the program bytes without trailing zeros). The escrow
+  address must be the PDA of `[b"htlc", lock_id]`. Once a token lock exists,
+  the escrow token account is the escrow PDA's associated token account for the
+  leg mint under the mint's token program (G21, done in
+  mnemonik-xyz/policy-execution#10). The `lock_id` sender bytes are the key that
+  signs the lock. An observed lock needs an
   escrow account that the program owns and whose data starts with the reference
   discriminator (section 4.6). S7 accepts the own lock only when the escrow address holds no account, or only a System-owned
   account without data (D3, done in mnemonik-xyz/policy-execution#9).
 
-Version 0.3 (planned, spec 13.4): the claim leaf starts with
-`<lock_id> OP_DROP`, and the keys are `claim_key` and `refund_key` (G4). The
-refund input has `nSequence` `0xFFFFFFFD` (G3). EVM S7 covers beacon,
-legacy-slot and diamond proxies (G20). Solana S7 checks the loader, the code
-hash and the escrow token account (G21). The
-profile clock follows G1, and `swap_id_binding` becomes `lock_id_binding`
-(G4).
+A policy pins each contract once per chain. A changed program or proxy (an
+upgrade during a swap) makes S7 halt the claim until G9 rebuilds exits.
 
 ### 4.6 Transaction decoders (S24)
 
@@ -429,15 +446,28 @@ profile clock follows G1, and `swap_id_binding` becomes `lock_id_binding`
 Reference EVM HTLC ABI:
 
 ```text
-lock(bytes32 swapId, address receiver, address refundTo, address token,
-     uint256 amount, bytes32 hashlock, uint64 timelock)
-claim(bytes32 swapId, bytes32 preimage)
-refund(bytes32 swapId)
+lock(bytes32 swapId, bytes1 leg, address receiver, address refundTo,
+     address token, uint256 amount, bytes32 hashlock, uint64 timelock)
+claim(bytes32 lockId, bytes32 preimage)
+refund(bytes32 lockId)
 ```
 
-Reference Solana HTLC instruction data: one tag byte (`0` lock, `1` claim, `2`
-refund) and then the fields in the order of the EVM ABI, little-endian
-integers, 32-byte keys.
+The contract computes `lockId = sha256(abi.encodePacked(swapId, leg, msg.sender))`.
+It rejects a leg byte other than `0x41` or `0x42` and any `lockId` that it used
+before, and it keeps the record after a claim or a refund. The reference EVM
+HTLC is not a proxy and has no fallback function, so a call with an unknown
+selector reverts, and the loupe call of S7 reverts. The observation adapter
+reads `EXTCODEHASH`, the six `evm::proxy_slot` words and the result of
+`facetAddresses()` at one block. When the EIP-1967 implementation slot holds an
+address, it also reads the `EXTCODEHASH` of that address at the same block.
+Only a call that ran and reverted is `Reverted`; an RPC error gives no
+observation.
+
+Reference Solana HTLC instruction data, little-endian integers and 32-byte
+keys. Lock: `0 ‖ swap_id ‖ leg ‖ receiver ‖ refund_to ‖ mint ‖ amount (u64) ‖
+hashlock ‖ timelock (i64)`, 178 bytes. Claim: `1 ‖ lock_id ‖ preimage`. Refund:
+`2 ‖ lock_id`. The program derives `lock_id` from the lock data and the signing
+account 0, and requires account 1 to be the PDA of `[b"htlc", lock_id]`.
 
 Reference Solana HTLC accounts. Lock: the sender (signer, writable) and the
 escrow PDA (writable). A token lock then has the sender's and the escrow's
@@ -449,24 +479,31 @@ account takes the payee's place, followed by the escrow's token account, the
 mint and the token program.
 
 Reference Solana HTLC escrow account. The lock instruction creates the escrow
-PDA from the seeds `[b"htlc", swap_id]`, and the program owns it. Its data
+PDA from the seeds `[b"htlc", lock_id]`, and the program owns it. Its data
 starts with the 8-byte discriminator `sha256("account:Escrow")[..8]`
 (`1fd57bbbba16da9b`), the Anchor account convention. The observation adapter
 reports the account at the escrow address as absent (a null RPC result) or as
 its owner, its data length and its first 8 data bytes. Quorum compares these
 facts as one value.
 
+Reference Solana program facts. The observation adapter reports the owner and
+the executable flag of the program account, the `ProgramData` address that
+`decode_program_account` reads from its data, and the owner and
+`decode_programdata` (upgrade authority and code hash) of the account at that
+address. For a token leg it reports the account at `escrow_token_address`: its
+owner program, mint, owner and state, or absent when it is not a 165-byte
+token account of SPL Token or Token-2022. The policy pin is
+`{"solana": {"program": <base58>, "code_hash": <hex>, "upgrade_authority"?: <base58>}}`.
+
 Transaction binding:
 
 | Family | Binding |
 |---|---|
 | Bitcoin | unsigned txid (hex, display order), each BIP 341 sighash and its type |
-| EVM | `keccak256(0x02 ‖ rlp(unsigned fields))` of each transaction, in order (`approve`, then lock) |
+| EVM | `keccak256(0x02 ‖ rlp(unsigned fields))` of each transaction, in order (`approve`, then lock); for a lock also `signer`, the 20-byte address of the leg's `sender`, which must sign every hash. S20 rejects an EVM lock warrant without it, and a claim or refund warrant with it. |
 | Solana | `blake3(message bytes)` |
 
-This is the reference interface of spec version 0.2. Version 0.3 (planned,
-spec 13.4) keys each lock by `lockId` in the EVM calls, in the Solana
-instruction data and in the PDA seeds (G4). It binds the prepared refund in
+Version 0.3 (planned, spec 13.4) binds the prepared refund in
 `warrant(lock)` (G11), allows a zero-allowance reset and a permit (G13),
 follows the Solana instruction table of spec 4.2 (G22) and takes Bitcoin
 prevouts from chain facts (G12).
@@ -539,8 +576,19 @@ D3, D7, D8, D9 and G2 in mnemonik-xyz/policy-execution#9 (commit `94174cf`,
 `check_mutations.py` caught 21 of 21 disabled checks, with the new checks
 `leg_b_absolute` and `s13_timelock`; the `wasm32-unknown-unknown` build
 succeeds. Manual mutations of each new rule that the script cannot reach each
-fail a test. `swap-verified` did not change. The table below gives the first
-results at `e9e9d31`.
+fail a test. `swap-verified` did not change.
+
+G4, G20 and G21 in mnemonik-xyz/policy-execution#10 (commit `9b407ff`,
+2026-10-08, merged into `main` as `aeccac9`): 144 `swap-core` tests passed
+(95 unit, 49 pipeline);
+`check_mutations.py` caught 23 of 23 disabled checks, with the new checks
+`s10_lock_id` and `s10_lock_binding`; the `wasm32-unknown-unknown` build
+succeeds. Manual mutations of each new rule each fail a test: 28 for
+`lock_id`, 15 for the EVM proxy rules, 29 for the Solana program identity and
+the escrow token account, 4 for the duplicate pin rule and the case of
+contract ids, 4 for the EVM lock signer and 4 from the review.
+`swap-verified` did not change. The table below gives the first results at
+`e9e9d31`.
 
 | Item | Result |
 |---|---|
