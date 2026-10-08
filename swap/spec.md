@@ -334,7 +334,7 @@ The warrant binds the exact transaction that the signer signs:
 | Chain family | `TxBinding` content |
 |---|---|
 | Bitcoin | Unsigned transaction id of the PSBT and every sighash that the signer produces. For `warrant(lock)`, also the txid and sighash of the prepared refund (section 8.6). |
-| EVM | EIP-1559 signing hash `keccak256(0x02 ‖ rlp([chain_id, nonce, max_priority_fee_per_gas, max_fee_per_gas, gas_limit, to, value, data, access_list]))`; the access list is empty. The EIP-712 digest of an EIP-2612 `permit`, when one replaces the `approve` (section 8.7). Under tier E1: the EIP-712 `SafeTx` hash (Safe nonce included, `operation` = CALL) or the ERC-4337 `userOpHash`. |
+| EVM | EIP-1559 signing hash `keccak256(0x02 ‖ rlp([chain_id, nonce, max_priority_fee_per_gas, max_fee_per_gas, gas_limit, to, value, data, access_list]))`; the access list is empty. The EIP-712 digest of an EIP-2612 `permit`, when one replaces the `approve` (section 8.7). Under tier E1: the EIP-712 `SafeTx` hash (Safe nonce included, `operation` = CALL) or the ERC-4337 `userOpHash`. A lock also binds `signer`, the leg's `sender`: the contract keys the lock by `msg.sender`, and the signing hash does not cover it. The policy signer signs every hash of a lock with that key only. |
 | Solana | Hash of the serialized transaction message. Under tier E1: the hash of the Squads vault transaction message that the proposal executes. |
 
 **Fee raises.** A fee raise (S19) changes the transaction and its hash. Each

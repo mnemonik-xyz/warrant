@@ -500,7 +500,7 @@ Transaction binding:
 | Family | Binding |
 |---|---|
 | Bitcoin | unsigned txid (hex, display order), each BIP 341 sighash and its type |
-| EVM | `keccak256(0x02 ‖ rlp(unsigned fields))` of each transaction, in order (`approve`, then lock) |
+| EVM | `keccak256(0x02 ‖ rlp(unsigned fields))` of each transaction, in order (`approve`, then lock); for a lock also `signer`, the 20-byte address of the leg's `sender`, which must sign every hash. S20 rejects an EVM lock warrant without it, and a claim or refund warrant with it. |
 | Solana | `blake3(message bytes)` |
 
 Version 0.3 (planned, spec 13.4) binds the prepared refund in
