@@ -302,7 +302,8 @@ Consumption spans all orders and settlement paths of one funding customer.
 Another customer cannot consume that customer's identifiers.
 
 The appended `customer` is part of the approved invoice policy and the signed or
-proven journal. Invoice policy commitments use `warrant/invoice-policy/v2`.
+proven journal. Invoice policy commitments use `warrant/invoice-policy/v3` since
+the multi-currency revision of 2026-10-08.
 Old 14-word journals are rejected by this contract revision.
 
 `hash_tagged` is SHA-256 over a length-prefixed domain tag and bincode 1.3
@@ -611,8 +612,10 @@ and local settlement; each subsequent guest revision requires fresh evidence.
 - No public deployment on Arc, and no funded settlement on a public network.
 - No real invoice traffic. Only fixtures exist.
 - No budget for each category or for each period. The escrow bounds each order.
-- UBL 2.1 and US dollars only. CII and Factur-X are not implemented. Every other
-  format is rejected; parsed non-USD invoices produce `Ask`.
+- UBL 2.1 only. CII and Factur-X are not implemented. Every other format is
+  rejected. Invoices in USD, EUR and AMD are paid in USDC at a rate the buyer
+  signs into the purchase order; other currencies produce `Ask`. No live FX
+  (foreign exchange) source exists.
 - The documented reproducible guest build uses Docker on x86; that build path
   was not validated in this run.
 - No security audit.

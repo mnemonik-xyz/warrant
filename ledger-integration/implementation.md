@@ -37,15 +37,18 @@ Commands. Every hash is printed as `0x` followed by 64 lowercase hex digits.
   "poRef": "PO-7",
   "poId": "0x…",
   "obligationId": "0x…",
-  "usd": true,
-  "payable": 1234560000,
+  "currency": "EUR",
+  "currencyConsistent": true,
+  "precise": true,
+  "payableMinor": 123456,
   "totalsConsistent": true
 }
 ```
 
-`payable` is in USDC base units, as `InvoiceFacts.payable`, or `null`. `usd`
-mirrors `InvoiceFacts.usd`. The [multi-currency change](../multi-currency/spec.md)
-replaces it with `currency`. `poRef`
+`payableMinor` is in minor units of `currency`, as `InvoiceFacts.payable_minor`,
+or `null`. The USDC amount depends on the order's signed rate
+([multi-currency](../multi-currency/spec.md)), so `facts` does not give it. The
+connector compares the paid amount with the invoice for USD only. `poRef`
 and `poId` are `null` if the document cites no order. A document that
 `parse_invoice` denies gives exit code 2 and a message on standard error.
 

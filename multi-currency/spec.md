@@ -1,6 +1,7 @@
 # Warrant multi-currency invoices: specification
 
-Version 0.1 · 2026-10-08 · Draft. Status: design only. No code exists.
+Version 0.1 · 2026-10-08 · Draft. Status: implemented and tested in
+`policy-execution` (checker version 3). The new invoice image is not built yet.
 [tasks.md](tasks.md) tracks the work.
 
 This document specifies a small change to the invoice checker. It lets Warrant
@@ -114,6 +115,20 @@ In `authorize_invoice` (`evidence.rs:653`):
 
 New `AskReason` values: `UnsupportedCurrency`, `CurrencyPrecision`,
 `CurrencyMismatch`. `NotUsd` is removed.
+
+Implementation decisions (2026-10-08):
+
+- Currency reasons are returned alone. The checker does not add
+  `TotalsInconsistent` or `PayableUnknown` to them: totals mean nothing in a
+  currency the checker cannot read.
+- `InvoiceFacts.payable` is renamed `payable_minor`, so every caller that
+  assumed USDC base units fails to compile. `usdc_amount(facts, po)` converts.
+- A `TaxTotal` in another currency is still skipped, as before: UBL allows a
+  separate tax currency. A monetary total in another currency gives
+  `CurrencyMismatch`.
+- The signing service reports the converted USDC amount as `payable` on `Ask`,
+  with `currency` and `invoicePayableMinor`. The buyer passes that amount to
+  `settleApproved`.
 
 ## 6. What changes and what does not
 
