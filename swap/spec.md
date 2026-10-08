@@ -1075,7 +1075,7 @@ chain profiles and the transaction decoders, with their tests (`swap-core`).
 They implement version 0.2 of this specification, plus the n-block clock model,
 `D_refund(B)` in S11 and S27 from mnemonik-xyz/policy-execution#8, and the
 fixes of D3, D7, D8, D9 and G2 from mnemonik-xyz/policy-execution#9.
-mnemonik-xyz/policy-execution#10 (open) fixes G4, G20 and G21. Section 13.4
+mnemonik-xyz/policy-execution#10 fixes G4, G20 and G21. Section 13.4
 lists the later requirements that they do not implement yet. The proof covers
 the evaluator and the arithmetic only. See [implementation.md](implementation.md) section 5 for the
 results.
@@ -1101,8 +1101,9 @@ The swap crates are on `policy-execution` `main`. mnemonik-xyz/policy-execution#
 merged them as commit `2e19118`. That commit contains the review fixes `83e7e57`
 and `33f8cdf` of the pull request branch. mnemonik-xyz/policy-execution#8 added
 the clock model and S27 as commit `e0a4285`. mnemonik-xyz/policy-execution#9
-added the fixes of D3, D7, D8, D9 and G2 as commit `89308bc`, which the
-submodule pins. The swap
+added the fixes of D3, D7, D8, D9 and G2 as commit `89308bc`.
+mnemonik-xyz/policy-execution#10 added G4, G20 and G21 as commit `aeccac9`,
+which the submodule pins. The swap
 crates change no invoice crate and no guest image id.
 
 The evaluator is already separate from the zkVM code. `core` and `verified` do
@@ -1206,7 +1207,7 @@ mnemonik-xyz/policy-execution#9, merged as `89308bc`, fixes D3, D7, D8, D9 and G
   next block while no lock exists, never from the adapter value. This covers
   relative block counts. A relative time on leg A stays unsupported (G25).
 
-mnemonik-xyz/policy-execution#10 (open) fixes G4, G20 and G21:
+mnemonik-xyz/policy-execution#10, merged as `aeccac9`, fixes G4, G20 and G21:
 
 - **G4.** Each lock carries `lock_id`. S10 checks it at every action
   (`S10_LOCK_ID`), and an exit halts on it. The sender bytes are in section

@@ -578,13 +578,15 @@ D3, D7, D8, D9 and G2 in mnemonik-xyz/policy-execution#9 (commit `94174cf`,
 succeeds. Manual mutations of each new rule that the script cannot reach each
 fail a test. `swap-verified` did not change.
 
-G4, G20 and G21 in mnemonik-xyz/policy-execution#10 (commit `820f052`,
-2026-10-08): 142 `swap-core` tests passed (93 unit, 49 pipeline);
+G4, G20 and G21 in mnemonik-xyz/policy-execution#10 (commit `9b407ff`,
+2026-10-08, merged into `main` as `aeccac9`): 144 `swap-core` tests passed
+(95 unit, 49 pipeline);
 `check_mutations.py` caught 23 of 23 disabled checks, with the new checks
 `s10_lock_id` and `s10_lock_binding`; the `wasm32-unknown-unknown` build
 succeeds. Manual mutations of each new rule each fail a test: 28 for
 `lock_id`, 15 for the EVM proxy rules, 29 for the Solana program identity and
-the escrow token account, 2 for the duplicate pin rule and 4 from the review.
+the escrow token account, 4 for the duplicate pin rule and the case of
+contract ids, 4 for the EVM lock signer and 4 from the review.
 `swap-verified` did not change. The table below gives the first results at
 `e9e9d31`.
 
