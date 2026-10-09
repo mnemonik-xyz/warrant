@@ -1,5 +1,15 @@
-# Warrant
+# Warrant project
 
+## Description 
+
+Warrant solves the problem of trust between AI agents. Agents need to talk to each other and act for people and companies, and that includes business and financial actions such as payments, invoices and cross-chain swaps. Warrant makes it possible.Our main idea is that we do not trust the agent or the model behind it, because a model can make mistakes, misunderstand a request or be manipulated by a malicious prompt.
+
+Warrant does not ask anyone to trust the agent. It makes every important action verifiable. The owner writes their intent as a policy in a small domain-specific language, built from a limited set of logic gates, such as "no more than this amount per deal" or "only with these counterparties." An evaluator applies that policy to checked facts about the proposed action and returns one of three answers: Allow, Ask or Deny. The evaluator is formally verified, which means a machine-checked proof shows its decision follows exactly what the policy says and nothing else. The key that can move money is held by a separate signer, not by the agent. The signer acts only when policy gates rules are met and  asks a human when facts are missing, and never blocks a refund.
+
+Each decision becomes a signed warrant that records the policy, the facts and the result, so the other party or an auditor can run the same check and get the same answer. Mnemonik is the trusted layer underneath. Agents negotiate through messages that are signed and encrypted, each agent has a verifiable identity, and the signed agreement is linked to the warrant that approved it. Warrants and negotiation records are then stored permanently on decentralized file storage, so anyone can later prove what was agreed, which policy allowed it and who signed it, without trusting either agent.
+
+
+## Main logic module
 One prototype explores policy-controlled agent payments:
 
 - [Policy execution](policy-execution/README.md): a fixed Rust policy evaluator,
