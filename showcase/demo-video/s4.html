@@ -1,0 +1,18 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="common.css"></head><body><div class="slide">
+<div class="kicker">The decision</div>
+<h2 style="margin-top:40px;font-size:84px">A formally verified evaluator decides.</h2>
+<div class="arrowflow">
+ <div class="node">Policy</div><div class="arr">+</div>
+ <div class="node">Checked facts</div><div class="arr">→</div>
+ <div class="node teal">Verified evaluator</div><div class="arr">→</div>
+ <div class="stack" style="gap:16px">
+  <div class="pill allow" style="width:360px;height:84px;font-size:40px">Allow</div>
+  <div class="pill ask" style="width:360px;height:84px;font-size:40px">Ask</div>
+  <div class="pill deny" style="width:360px;height:84px;font-size:40px">Deny</div>
+ </div>
+</div>
+<div class="row" style="margin-top:44px">
+ <div class="chip"><b>Machine-checked proof</b>The decision follows the policy and nothing else. Proved with Verus; re-executable by anyone, or inside a RISC Zero zkVM.</div>
+ <div class="chip"><b>Separate signer</b>The key that moves money is never held by the agent. It signs only when the gates are met, and asks a human otherwise.</div>
+</div>
+</div></body></html>
