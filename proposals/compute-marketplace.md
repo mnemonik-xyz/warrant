@@ -7,23 +7,24 @@ The earlier marketplace concept in the parent repository
 (`policy-market/marketplace.md`) is a different stack. This document keeps only its idea.
 
 Abbreviations: MCP — Model Context Protocol; GPU — Graphics Processing Unit;
-RFB — Request for Builders.
+RFB — Request for Builders; TLS — Transport Layer Security; API — Application
+Programming Interface.
 
 ## 1. Question and short answer
 
 Question: can a marketplace serve as the meeting point for buyers and sellers of
 compute, with Warrant as the payment rail, and sign nothing?
 
-Answer: yes.
+Answer: yes, and we do not need to build the marketplace. Circle's Discovery API
+can be the listing board. Warrant settles the deal.
 
-- The marketplace is a discovery service. It lists sellers and relays quotes.
-- The marketplace holds no key that any policy pins. It is not in the money path.
+- The listing board is a discovery service. It holds no key that any policy pins.
 - The buyer keeps the registry key and the acceptance key, as the showcase does today.
 - The seller keeps the quote key and the payout address.
 - The escrow on Arc stays unchanged.
 
 The cost of this answer is one gap. Nobody can accept a delivery for an absent buyer.
-Section 6 states what happens then.
+Section 7 states what happens then.
 
 ## 2. Decisions from the design interview
 
@@ -34,8 +35,10 @@ The interview on 2026-10-13 fixed these points:
 | Sellers on day one | io.net GPU classes, through the existing adapter. One real provider, labelled as one. |
 | Unit of sale | A lease: an authenticated GPU endpoint for a fixed number of hours. |
 | Settlement | The simplest path, with a real proof. The proof work belongs to `policy-execution`, not to this document. |
-| Marketplace signatures | None. The marketplace must not sign anything. |
+| Marketplace signatures | None. The listing board must not sign anything. |
 | Reputation | None for now. |
+| Listing board | Circle Discovery API first. Our own board only if Circle declines the listing. |
+| `settleBy` | To be decided after a measured provisioning time on io.net. |
 | Scope | As simple as possible. |
 
 ## 3. Starting point: the showcase as implemented
@@ -54,97 +57,144 @@ Two keys authorize facts in this flow. `init.py` generates both on the buyer sid
 - `registry.key` signs the vendor credential: recipient, category, scope and validity.
 - `buyer_acceptance.key` signs the acceptance: task, deliverable hash, recipient and amount.
 
-The buyer is therefore already its own registry. The marketplace does not change this.
+The buyer is therefore already its own registry. The listing board does not change this.
 
-## 4. What the marketplace is
+## 4. Why credential issuance needs a decision
 
-The marketplace is one MCP server that stands in front of many seller MCP servers.
-On day one it stands in front of one. It exposes two tools:
+The vendor credential is the only source of two fields that select: the recipient
+address and the category. The checker's `vendor_category_in` and `recipient_equals`
+atoms pass when the credential says so. The project invariant states that fields that
+select must never come from the text or the model.
 
-- `list_offers(category, constraints)` returns listings that match.
-- `get_quote(listing_id, duration_hours)` forwards the request to the seller server and returns the quote.
+If the guardrail signs a credential for any seller the agent picks from a listing,
+the agent picks the recipient. The registry key becomes a stamp. The invariant is broken.
+The issuance step is therefore the point where a party other than the model decides
+that this address is a seller of this category.
 
-The marketplace stores listings, serves them, and forwards quote requests. It does nothing else.
+### 4.1 The issuance flow
 
-### 4.1 Who signs what
+1. The guardrail receives a seller-signed quote. The quote names a recipient.
+2. The guardrail looks up the recipient in the buyer's seller list.
+3. If the recipient is present and the credential is valid, the flow continues.
+4. If the recipient is absent, the guardrail applies the issuance rule from the policy.
+5. The rule returns one of three results: issue, ask, or refuse.
+6. On issue, the guardrail signs a credential with the buyer registry key. The credential names the recipient, the category, the scope and a validity window.
+7. On ask, the guardrail returns a pending state. A human approves or rejects in the guardrail, not in the agent.
+8. On refuse, the quote is rejected.
 
-| Object | Signer | Reader |
-|---|---|---|
-| Listing | The seller, with the seller key | The marketplace, the buyer guardrail |
-| Quote | The seller, with the seller key | The buyer guardrail |
-| Vendor credential | The buyer, with the buyer registry key | The checker |
-| Acceptance | The buyer, with the buyer acceptance key | The checker |
-| Authorization journal | The checker, through a proof or a named signer | The escrow |
-| Nothing | The marketplace | — |
+### 4.2 Three issuance rules and their trust assumptions
 
-### 4.2 The listing
+| Rule | Who decides | Trust assumption | Loss bound if the assumption fails |
+|---|---|---|---|
+| Human click | A human, once per seller, for the credential validity window | The human reads the listing and the payout address before the click | One seller's leases up to the policy budget |
+| Per-seller budget | A rule in the policy | The model can select any listed address. Loss per unvetted seller is bounded. | The per-seller budget, times the number of unvetted sellers, capped by a total budget for unvetted sellers |
+| Circle listing match | Circle's review, read by the guardrail over TLS | Circle screened the payout wallet and reviewed the listing. The Discovery response is honest. TLS to `api.circle.com` is intact. | One seller's leases up to the policy budget, for a seller Circle listed |
 
-A listing is a signed record with these fields:
+The simplest release uses the human click. The per-seller budget is the first automation.
+The Circle match is a stronger automation and adds one named dependency.
 
-- seller payout address, which must equal the recipient in every quote;
-- category, from the policy taxonomy, such as 42 for GPU transcription;
-- hardware class and hourly price;
-- maximum lease duration;
-- seller MCP server URL;
-- validity window;
-- the seller signature over all fields above.
+None of the three rules checks delivery quality. They decide only that an address is a
+seller. The acceptance signature after the probe decides that a lease was delivered.
 
-A quote is the existing `propose_deployment` response, signed by the seller key.
-Its `recipient` must equal the listing's payout address. The buyer guardrail rejects a quote that differs.
+## 5. Circle Discovery as the listing board
 
-## 5. The flow with the marketplace
+Measured on 2026-10-13 against `https://api.circle.com/v2/x402/discovery/resources`:
 
-1. The buyer agent calls `list_offers` on the marketplace and selects a listing.
-2. The buyer agent calls `get_quote`. The marketplace forwards it and returns the seller-signed quote.
-3. The buyer guardrail checks the listing signature, the quote signature and the recipient match.
-4. If the seller is new to this buyer, the guardrail issues a vendor credential with the buyer registry key. The policy can require a human click for this step, or allow it under a per-seller budget.
+| Fact | Value |
+|---|---|
+| Resources | 2,854 from 42 providers |
+| Categories | 7: SOCIAL_INTELLIGENCE, WEB_SEARCH_RESEARCH, FINANCIAL_ANALYSIS, INFRASTRUCTURE, DATA_ENRICHMENT, PREDICTION_MARKETS, CREATIVE |
+| Filters | `category`, `network`, `type` (http or mcp), `maxUsdPrice`, `limit`, `offset` |
+| Arc mainnet (`eip155:5042`) | Accepted by 2,195 resources, with USDC at `0x3600…0000` and EIP-3009 transfers |
+| Arc testnet (`eip155:5042002`) | Not present in the catalogue |
+| Payment schemes | `exact` on 18,070 entries, `upto` on 25, `batch-settlement` on 10 |
+| MCP-type resources | 0 |
+| GPU leases | None. The closest entry is per-call audio transcription at 10 USDC per call. |
+| Authentication | None. No API key. |
+| Response | JSON over TLS. Not signed. Cached for one hour. |
+
+How a seller gets listed, per Circle's
+[get-listed page](https://developers.circle.com/agent-stack/agent-marketplace/get-listed.md),
+read on 2026-10-13:
+
+- The endpoint must return `402 Payment Required` when unpaid and serve the resource when paid.
+- The seller publishes an OpenAPI specification for the endpoint.
+- The seller submits a form with the endpoint URL, the payout wallet address and a description.
+- Circle reviews listings manually. A self-serve flow is announced, not available.
+- Circle sanctions-screens the payout wallet and health-checks the endpoint continuously.
+
+### 5.1 How Warrant sellers fit
+
+Every listed resource is a pay-per-call endpoint. A Warrant lease is not. The seller
+therefore lists its **quote endpoint**, not the lease:
+
+- The quote endpoint returns 402 when unpaid. It charges a nominal quote fee over x402 on Arc.
+- A paid call returns the seller-signed quote: escrow address, policy template, recipient, hardware class, price and maximum duration.
+- The resource's `payTo` must equal the recipient in every quote. The guardrail rejects a quote that differs.
+- The lease itself settles through `TaskEscrow`, as today.
+
+Two things are not established. Circle has not confirmed that it accepts an endpoint
+whose product settles outside x402. The catalogue carries no testnet network, so a
+listing names a mainnet payout address and follows the mainnet canary plan.
+
+## 6. The flow with Circle Discovery
+
+1. The buyer agent asks the guardrail for offers. The guardrail queries Circle Discovery with `category`, `network=eip155:5042` and a provider tag.
+2. The buyer agent selects a resource and pays the quote fee over x402. The seller returns the signed quote.
+3. The guardrail checks the quote signature and the recipient match against the listed `payTo`.
+4. The guardrail applies the issuance rule from section 4 for a new seller.
 5. The guardrail runs `warrant_evaluate_and_offer` as today. The escrow reserves the funds.
 6. The seller server accepts and provisions, as today.
 7. The guardrail probes `/health` and signs the acceptance as a background task. It does not wait for the agent.
 8. The seller server settles, as today.
 
-Steps 5 to 8 are unchanged. The marketplace appears only in steps 1 and 2.
+Steps 5 to 8 are unchanged. Circle appears only in step 1. If Circle declines the
+listing, a small board of our own serves step 1 with the same record format.
 
-## 6. The absent buyer
+## 7. The absent buyer
 
-The guardrail is a daemon. Step 7 runs without the agent. The buyer is absent only when the guardrail is offline.
+The guardrail is a daemon. Step 7 runs without the agent. The buyer is absent only
+when the guardrail is offline.
 
-In that case the acceptance never arrives. After `settleBy` anyone can call `refund`. The buyer recovers the funds. The seller bears the provisioning cost.
+In that case the acceptance never arrives. After `settleBy` anyone can call `refund`.
+The buyer recovers the funds. The seller bears the provisioning cost.
 
-This is the fail-closed rule from the project research: a timeout must fail closed. The marketplace must not fill this gap with its own signature, because the interview excluded marketplace signatures. A later release can let the buyer name an independent prober as reviewer. That prober is not the marketplace.
+This is the fail-closed rule from the project research: a timeout must fail closed.
+The listing board must not fill this gap with its own signature. A later release can
+let the buyer name an independent prober as reviewer. That prober is not the board.
 
-## 7. What the marketplace cannot do
+## 8. What the listing board cannot do
 
 - It cannot redirect money. The recipient is fixed at `offer`, and the credential that names it is signed by the buyer.
 - It cannot raise the price. The quote is signed by the seller, and the amount sits inside the buyer's budget cap.
 - It cannot change a policy. It never sees a policy key.
 - It cannot hold funds. The escrow has no administrator and no fee split.
 
-It can omit a seller or serve a stale listing. That is a liveness fault, not a safety fault.
+It can omit a seller, delist one, or serve a stale listing. That is a liveness fault, not a safety fault.
 
-## 8. What stays out
+## 9. What stays out
 
 - Reputation. The escrow events on Arc are public, and a score can be computed later from them. RFB-003 in the parent repository describes a suitable formula. It is not part of this release.
 - Open seller registration. Day one has one seller.
 - Disputes. Warrant has no dispute path. A refused acceptance ends in a refund.
-- Fees. Any marketplace fee is a separate agreement outside the contract.
+- Fees. Any fee is a separate agreement outside the contract.
 - Seller attestation of the allocated hardware. The showcase states that no such attestation exists.
 - Real proof settlement in place of the digest verifier. This is `policy-execution` work.
 
-## 9. Effort
+## 10. Effort
 
 | Component | Work | Estimate |
 |---|---|---|
-| Listing and quote formats | Two signed records, unknown fields rejected | 1 day |
-| Marketplace MCP server | `list_offers`, `get_quote`, a listing store, forwarding to seller servers | 2 days |
-| Seller server | Sign listings and quotes with the seller key | 1 day |
-| Buyer guardrail | Check both signatures, issue a credential for a new seller, probe and sign in the background | 2 days |
-| Demo | Extend the showcase flow with the marketplace in front | 1 day |
+| Seller quote endpoint | Return 402, charge a quote fee over x402 on Arc, return the signed quote, publish an OpenAPI specification | 2 days |
+| Circle submission | Form, then manual review | Unknown lead time |
+| Buyer guardrail | Query Discovery, check the quote signature and the `payTo` match, apply the issuance rule, probe and sign in the background | 2 days |
+| Demo | Extend the showcase flow with discovery in front | 1 day |
+| Fallback board | Only if Circle declines: a store and one `list_offers` tool | 2 days |
 
-About one engineer-week. No contract, guest or proof changes.
+About one engineer-week plus the review wait. No contract, guest or proof changes.
 
-## 10. Open questions
+## 11. Open questions
 
-- Should credential issuance for a new seller require a human click, or a per-seller budget in the policy?
-- Should the marketplace also publish listings to the Circle Discovery API, so agents find them through the existing channel?
-- How long must `settleBy` be, so that provisioning on io.net finishes before the refund window opens?
+- Does Circle accept a quote endpoint whose product settles outside x402? Ask before the seller work starts.
+- How long must `settleBy` be? Measure provisioning time on io.net first.
+- When does the per-seller budget rule replace the human click?
