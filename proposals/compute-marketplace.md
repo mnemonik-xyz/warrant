@@ -39,7 +39,7 @@ The interview on 2026-10-13 fixed these points:
 | Reputation | None for now. |
 | Listing board | Circle Discovery API first. Our own board only if Circle declines the listing. |
 | Lease structure, first release | One lease is a sequence of short interval tasks. Service for an interval is released only after that interval's acceptance. See section 6.1. |
-| Lease structure, target | One escrow order for the whole lease, settled per interval against buyer-signed vouchers. Needs a lease guest. See section 6.2. |
+| Lease structure, target | One escrow order for the whole lease, settled per interval against buyer-signed vouchers. Uses Warrant's metered lease family, a production-readiness track in `policy-execution`. See section 6.2. |
 | `settleBy` | Per interval task: the interval length plus a margin. The first task also covers the provisioning time, which is still to be measured. |
 | Scope | As simple as possible. |
 
@@ -195,6 +195,10 @@ each interval. Section 6.2 states the target that removes these limits.
 
 ### 6.2 Target: one escrow order per lease
 
+The target consumes a Warrant policy family, the metered lease. That family is part
+of making Warrant production ready. It is specified and tracked in `policy-execution`,
+not here. This section states only what the marketplace needs from it.
+
 `InvoiceEscrow` already holds the model the target needs. It checks only the fifteen
 journal words against the order. It knows nothing about invoices. A lease is an order
 with `poId` as the lease identifier and `poMaxTotal` as the ceiling.
@@ -218,15 +222,9 @@ What the target does not add: the chain still cannot see the GPU. The checker ve
 signatures and arithmetic. Delivery evidence stays a buyer-signed voucher, and the
 seller's defence stays the interval token.
 
-What the target costs, in `policy-execution`:
-
-- A lease evidence module in `core`: verify the voucher against the acceptance key in the policy, compute the amount, derive the obligation. The signature code exists for the task path.
-- A lease guest in `methods`, three host subcommands, fixtures shared with the Solidity tests, a catalogue template, a mock-verifier path for the showcase.
-- A new deployment of `InvoiceEscrow` pinned to the lease image. No contract change.
-- The lease checker is tested, not proved. The Verus proof covers the evaluator only.
-
-About two engineer-weeks, plus the same orchestration as section 6.1. The orchestration
-carries over: fund once instead of N times, settle against an order instead of a task.
+What the target costs the marketplace: the same orchestration as section 6.1. Fund
+once instead of N times, settle against an order instead of a task. The family itself
+is costed in its own specification.
 
 One operational point: a real proof per interval is minutes on the recorded sample.
 The signature path of `InvoiceEscrow` covers it. Below the threshold, the buyer's
@@ -234,13 +232,13 @@ guardrail acts as the named signer and countersigns the journal it already agree
 when it signed the voucher. If the buyer withholds that countersignature, the seller
 proves the same voucher and settles through the proof path.
 
-### 6.3 Where the implementation is specified
+### 6.3 The metered lease family
 
-The lease evidence module, the guest, the host subcommands and the buyer threat table
-are implementation work in `policy-execution`. They are specified next to the mainnet
-canary plan, in
+The family is specified in `policy-execution` at
 [docs/product/lease-evidence.md](https://github.com/mnemonik-xyz/policy-execution/pull/23),
-as canary work item 13. This proposal keeps the design argument only.
+as delivery plan track L1 and a policy catalog entry. That document holds the module,
+the guest, the adapters, the buyer threat table and the acceptance criteria. This
+proposal is its first consumer and does not own it.
 
 ## 7. The absent buyer
 
@@ -271,7 +269,7 @@ It can omit a seller, delist one, or serve a stale listing. That is a liveness f
 - Fees. Any fee is a separate agreement outside the contract.
 - Seller attestation of the allocated hardware. The showcase states that no such attestation exists.
 - Real proof settlement in place of the digest verifier. This is `policy-execution` work.
-- The lease guest and the lease order of section 6.2. This is the target, after the first release.
+- The metered lease family of section 6.2. It is a `policy-execution` production-readiness track, consumed here when it ships.
 
 ## 10. Effort
 
@@ -284,12 +282,12 @@ It can omit a seller, delist one, or serve a stale listing. That is a liveness f
 | Demo | Extend the showcase flow with discovery in front | 1 day |
 | Fallback board | Only if Circle declines: a store and one `list_offers` tool | 2 days |
 
-About two engineer-weeks plus the review wait for the first release. No contract, guest or proof changes. The target of section 6.2 adds about two engineer-weeks in `policy-execution`.
+About two engineer-weeks plus the review wait for the first release. No contract, guest or proof changes. The target of section 6.2 waits for the metered lease family, costed in its own specification.
 
 ## 11. Open questions
 
 - Does Circle accept a quote endpoint whose product settles outside x402? Ask before the seller work starts.
 - How long is the provisioning time on io.net? The first task's `settleBy` depends on it.
 - What interval length balances fees against exposure for a 0.35 USDC per hour GPU?
-- When does the lease guest start? It is the next `policy-execution` guest after the real proof settlement.
+- When does the metered lease family ship? That is a `policy-execution` decision in the delivery plan.
 - When does the per-seller budget rule replace the human click?
