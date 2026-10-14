@@ -38,7 +38,8 @@ The interview on 2026-10-13 fixed these points:
 | Marketplace signatures | None. The listing board must not sign anything. |
 | Reputation | None for now. |
 | Listing board | Circle Discovery API first. Our own board only if Circle declines the listing. |
-| Lease structure | One lease is a sequence of short interval tasks. Service for an interval is released only after that interval's acceptance. See section 6.1. |
+| Lease structure, first release | One lease is a sequence of short interval tasks. Service for an interval is released only after that interval's acceptance. See section 6.1. |
+| Lease structure, target | One escrow order for the whole lease, settled per interval against buyer-signed vouchers. Needs a lease guest. See section 6.2. |
 | `settleBy` | Per interval task: the interval length plus a margin. The first task also covers the provisioning time, which is still to be measured. |
 | Scope | As simple as possible. |
 
@@ -187,6 +188,52 @@ itself, and the worker image needs no change for token rotation. Direct access t
 worker, as the showcase README also describes, would need a token rotation endpoint
 in the worker and a new image. That is a later option.
 
+Interval tasks are the first release, not the target. The lease exists only in the
+seller's session and the guardrail's loop. The chain sees N unrelated tasks. Either
+side can walk away at an interval boundary with no record, and the seller can reprice
+each interval. Section 6.2 states the target that removes these limits.
+
+### 6.2 Target: one escrow order per lease
+
+`InvoiceEscrow` already holds the model the target needs. It checks only the fifteen
+journal words against the order. It knows nothing about invoices. A lease is an order
+with `poId` as the lease identifier and `poMaxTotal` as the ceiling.
+
+The target design:
+
+- The buyer funds one order for the whole lease: rate, interval length, maximum intervals and deadline in the policy hash, the ceiling reserved at `offer`.
+- The seller accepts the whole lease once, at a fixed rate.
+- After each interval the buyer signs a voucher: lease identifier, interval index, token hash.
+- The seller settles interval k with that voucher. The obligation is `hash(lease, k)`, so each interval pays once. The amount is the rate. The escrow enforces the ceiling, the deadline and single payment per interval.
+- The seller chooses when to settle. It can settle late and in batches. A missing voucher stops the next token, as in section 6.1.
+- After `settleBy`, the unpaid remainder returns to the buyer.
+
+What the target adds over interval tasks:
+
+- The agreement is on chain. A seller that stops has unpaid intervals on an accepted order. A buyer that stops has reserved funds until `settleBy`. Neither can reprice.
+- Transactions drop from 3N to N plus 2.
+- The on-chain record shows one lease with k paid intervals.
+
+What the target does not add: the chain still cannot see the GPU. The checker verifies
+signatures and arithmetic. Delivery evidence stays a buyer-signed voucher, and the
+seller's defence stays the interval token.
+
+What the target costs, in `policy-execution`:
+
+- A lease evidence module in `core`: verify the voucher against the acceptance key in the policy, compute the amount, derive the obligation. The signature code exists for the task path.
+- A lease guest in `methods`, three host subcommands, fixtures shared with the Solidity tests, a catalogue template, a mock-verifier path for the showcase.
+- A new deployment of `InvoiceEscrow` pinned to the lease image. No contract change.
+- The lease checker is tested, not proved. The Verus proof covers the evaluator only.
+
+About two engineer-weeks, plus the same orchestration as section 6.1. The orchestration
+carries over: fund once instead of N times, settle against an order instead of a task.
+
+One operational point: a real proof per interval is minutes on the recorded sample.
+The signature path of `InvoiceEscrow` covers it. Below the threshold, the buyer's
+guardrail acts as the named signer and countersigns the journal it already agreed to
+when it signed the voucher. If the buyer withholds that countersignature, the seller
+proves the same voucher and settles through the proof path.
+
 ## 7. The absent buyer
 
 The guardrail is a daemon. Step 7 runs without the agent. The buyer is absent only
@@ -216,6 +263,7 @@ It can omit a seller, delist one, or serve a stale listing. That is a liveness f
 - Fees. Any fee is a separate agreement outside the contract.
 - Seller attestation of the allocated hardware. The showcase states that no such attestation exists.
 - Real proof settlement in place of the digest verifier. This is `policy-execution` work.
+- The lease guest and the lease order of section 6.2. This is the target, after the first release.
 
 ## 10. Effort
 
@@ -224,14 +272,16 @@ It can omit a seller, delist one, or serve a stale listing. That is a liveness f
 | Seller quote endpoint | Return 402, charge a quote fee over x402 on Arc, return the signed quote, publish an OpenAPI specification | 2 days |
 | Circle submission | Form, then manual review | Unknown lead time |
 | Buyer guardrail | Query Discovery, check the quote signature and the `payTo` match, apply the issuance rule, probe and sign in the background | 2 days |
+| Interval tasks | Lease session on the seller, interval loop in the guardrail, tests | 3 to 4 days |
 | Demo | Extend the showcase flow with discovery in front | 1 day |
 | Fallback board | Only if Circle declines: a store and one `list_offers` tool | 2 days |
 
-About one engineer-week plus the review wait. No contract, guest or proof changes.
+About two engineer-weeks plus the review wait for the first release. No contract, guest or proof changes. The target of section 6.2 adds about two engineer-weeks in `policy-execution`.
 
 ## 11. Open questions
 
 - Does Circle accept a quote endpoint whose product settles outside x402? Ask before the seller work starts.
 - How long is the provisioning time on io.net? The first task's `settleBy` depends on it.
 - What interval length balances fees against exposure for a 0.35 USDC per hour GPU?
+- When does the lease guest start? It is the next `policy-execution` guest after the real proof settlement.
 - When does the per-seller budget rule replace the human click?
