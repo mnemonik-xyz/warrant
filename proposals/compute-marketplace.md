@@ -239,7 +239,7 @@ proves the same voucher and settles through the proof path.
 The lease evidence module, the guest, the host subcommands and the buyer threat table
 are implementation work in `policy-execution`. They are specified next to the mainnet
 canary plan, in
-[docs/product/lease-evidence.md](https://github.com/mnemonik-xyz/policy-execution/pull/21),
+[docs/product/lease-evidence.md](https://github.com/mnemonik-xyz/policy-execution/pull/23),
 as canary work item 13. This proposal keeps the design argument only.
 
 ## 7. The absent buyer
