@@ -38,8 +38,8 @@ The interview on 2026-10-13 fixed these points:
 | Marketplace signatures | None. The listing board must not sign anything. |
 | Reputation | None for now. |
 | Listing board | Circle Discovery API first. Our own board only if Circle declines the listing. |
-| Acceptance time | At the end of the lease, after periodic probes, not at provisioning. See section 6.1. |
-| `settleBy` | Provisioning time plus the lease duration plus a margin. The provisioning time on io.net is still to be measured. |
+| Lease structure | One lease is a sequence of short interval tasks. Service for an interval is released only after that interval's acceptance. See section 6.1. |
+| `settleBy` | Per interval task: the interval length plus a margin. The first task also covers the provisioning time, which is still to be measured. |
 | Scope | As simple as possible. |
 
 ## 3. Starting point: the showcase as implemented
@@ -146,30 +146,46 @@ listing names a mainnet payout address and follows the mainnet canary plan.
 4. The guardrail applies the issuance rule from section 4 for a new seller.
 5. The guardrail runs `warrant_evaluate_and_offer` as today. The escrow reserves the funds.
 6. The seller server accepts and provisions, as today.
-7. The guardrail probes `/health` at a fixed interval for the whole lease. At the end of the lease it signs the acceptance as a background task. It does not wait for the agent.
-8. The seller server settles, as today.
+7. The guardrail probes `/health`, signs the acceptance for the current interval, and funds the next interval task. It runs as a background task and does not wait for the agent.
+8. The seller server settles the interval and releases the token for the next one.
 
-Steps 5, 6 and 8 are unchanged. Step 7 changes when the acceptance is signed. Circle
-appears only in step 1. If Circle declines the listing, a small board of our own
-serves step 1 with the same record format.
+Steps 5 and 6 are unchanged. Steps 7 and 8 repeat once per interval. Circle appears
+only in step 1. If Circle declines the listing, a small board of our own serves step 1
+with the same record format.
 
-### 6.1 Acceptance at the end of the lease
+### 6.1 Interval tasks: bounded exposure for both sides
 
-The showcase signs the acceptance after the first successful probe. For a lease sold
-by the hour that is too early. A seller could settle and then stop the endpoint before
-the hour ends. The buyer would pay the full price for a moment of availability.
+The showcase signs one acceptance after the first probe, with the buyer's own key.
+A fact that one party controls protects that party only. Signed at provisioning, the
+seller can take the money and stop the endpoint. Signed at the end, the buyer can use
+the hour and never sign. No timing rule fixes this. The exposure must be bounded instead.
 
 The rule in this proposal:
 
-- The guardrail probes `/health` every `probe_interval` seconds from the first success to the end of the lease.
-- The acceptance is signed only after the lease duration has elapsed and every probe in the window succeeded, within a stated tolerance for missed probes.
-- A failed window produces no acceptance. The task refunds after `settleBy`.
-- `settleBy` must therefore exceed `acceptBy` plus the provisioning time plus the lease duration plus a margin for settlement.
+- One lease of N intervals is N escrow tasks, for example four tasks of 15 minutes for one hour. Each task has its own `taskId`, amount, `acceptBy` and `settleBy`.
+- The container is provisioned once, at the first task, and keeps running. Each task delivers a fresh worker token for its interval. The `deliverableHash` of the task is the hash of that token.
+- The seller releases the token for interval k only after the buyer signed the acceptance for interval k and the seller settled it. No signature, no token.
+- The buyer funds task k+1 before interval k ends. A buyer that stops funding gets no further intervals. A seller that stops serving gets no further acceptances.
+- The buyer can cancel any task the seller has not accepted. The seller accepts each task at the start of its interval.
 
-The cost of the rule: the seller is unpaid until the lease ends and bears the whole
-lease against an offline guardrail. That matches the fail-closed rule. A longer lease
-can be sold as a sequence of one-hour tasks, so that each hour settles on its own. The
-probe records are evidence the buyer keeps. They are not part of the proof.
+Exposure per side is one interval. The seller's residue is the provisioning time of a
+buyer that never signs the first interval. That is a no-show, bounded, and paid once
+per buyer.
+
+What stays unchanged: the contracts, the guest image, the policy template, and the
+amount per task as a policy parameter. The policy validity of 900 seconds in the
+showcase already matches a 15-minute interval.
+
+The cost: three transactions per interval, `offer`, `accept` and `settle`, at about
+0.01 USDC each on Arc. For a one-hour lease at 0.35 USDC that is about 0.12 USDC of
+fees, which is high. Longer intervals lower the fee share and raise the exposure.
+The interval length is a policy parameter, not a fixed rule.
+
+The buyer reaches the worker through the seller's `transcribe_audio` tool, which the
+showcase already provides. The seller server therefore enforces the interval token
+itself, and the worker image needs no change for token rotation. Direct access to the
+worker, as the showcase README also describes, would need a token rotation endpoint
+in the worker and a new image. That is a later option.
 
 ## 7. The absent buyer
 
@@ -216,6 +232,6 @@ About one engineer-week plus the review wait. No contract, guest or proof change
 ## 11. Open questions
 
 - Does Circle accept a quote endpoint whose product settles outside x402? Ask before the seller work starts.
-- How long is the provisioning time on io.net? `settleBy` depends on it.
-- What is the probe interval and the tolerance for missed probes?
+- How long is the provisioning time on io.net? The first task's `settleBy` depends on it.
+- What interval length balances fees against exposure for a 0.35 USDC per hour GPU?
 - When does the per-seller budget rule replace the human click?
