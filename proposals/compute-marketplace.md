@@ -38,7 +38,8 @@ The interview on 2026-10-13 fixed these points:
 | Marketplace signatures | None. The listing board must not sign anything. |
 | Reputation | None for now. |
 | Listing board | Circle Discovery API first. Our own board only if Circle declines the listing. |
-| `settleBy` | To be decided after a measured provisioning time on io.net. |
+| Acceptance time | At the end of the lease, after periodic probes, not at provisioning. See section 6.1. |
+| `settleBy` | Provisioning time plus the lease duration plus a margin. The provisioning time on io.net is still to be measured. |
 | Scope | As simple as possible. |
 
 ## 3. Starting point: the showcase as implemented
@@ -145,11 +146,30 @@ listing names a mainnet payout address and follows the mainnet canary plan.
 4. The guardrail applies the issuance rule from section 4 for a new seller.
 5. The guardrail runs `warrant_evaluate_and_offer` as today. The escrow reserves the funds.
 6. The seller server accepts and provisions, as today.
-7. The guardrail probes `/health` and signs the acceptance as a background task. It does not wait for the agent.
+7. The guardrail probes `/health` at a fixed interval for the whole lease. At the end of the lease it signs the acceptance as a background task. It does not wait for the agent.
 8. The seller server settles, as today.
 
-Steps 5 to 8 are unchanged. Circle appears only in step 1. If Circle declines the
-listing, a small board of our own serves step 1 with the same record format.
+Steps 5, 6 and 8 are unchanged. Step 7 changes when the acceptance is signed. Circle
+appears only in step 1. If Circle declines the listing, a small board of our own
+serves step 1 with the same record format.
+
+### 6.1 Acceptance at the end of the lease
+
+The showcase signs the acceptance after the first successful probe. For a lease sold
+by the hour that is too early. A seller could settle and then stop the endpoint before
+the hour ends. The buyer would pay the full price for a moment of availability.
+
+The rule in this proposal:
+
+- The guardrail probes `/health` every `probe_interval` seconds from the first success to the end of the lease.
+- The acceptance is signed only after the lease duration has elapsed and every probe in the window succeeded, within a stated tolerance for missed probes.
+- A failed window produces no acceptance. The task refunds after `settleBy`.
+- `settleBy` must therefore exceed `acceptBy` plus the provisioning time plus the lease duration plus a margin for settlement.
+
+The cost of the rule: the seller is unpaid until the lease ends and bears the whole
+lease against an offline guardrail. That matches the fail-closed rule. A longer lease
+can be sold as a sequence of one-hour tasks, so that each hour settles on its own. The
+probe records are evidence the buyer keeps. They are not part of the proof.
 
 ## 7. The absent buyer
 
@@ -196,5 +216,6 @@ About one engineer-week plus the review wait. No contract, guest or proof change
 ## 11. Open questions
 
 - Does Circle accept a quote endpoint whose product settles outside x402? Ask before the seller work starts.
-- How long must `settleBy` be? Measure provisioning time on io.net first.
+- How long is the provisioning time on io.net? `settleBy` depends on it.
+- What is the probe interval and the tolerance for missed probes?
 - When does the per-seller budget rule replace the human click?
