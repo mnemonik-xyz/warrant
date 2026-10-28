@@ -1,3 +1,18 @@
 [submodule "policy-execution"]
 	path = policy-execution
 	url = git@github.com:mnemonik-xyz/policy-execution.git
+[submodule "warrant-showcases"]
+	path = warrant-showcases
+	url = git@github.com:mnemonik-xyz/warrant-showcases.git
+[submodule "warrant-buyer"]
+	path = warrant-buyer
+	url = git@github.com:mnemonik-xyz/warrant-buyer.git
+[submodule "warrant-canary-deployment"]
+	path = warrant-canary-deployment
+	url = git@github.com:mnemonik-xyz/warrant-canary-deployment.git
+[submodule "warrant-swap"]
+	path = warrant-swap
+	url = git@github.com:mnemonik-xyz/warrant-swap.git
+[submodule "warrant-bean-count-ledger"]
+	path = warrant-bean-count-ledger
+	url = git@github.com:mnemonik-xyz/warrant-bean-count-ledger.git
