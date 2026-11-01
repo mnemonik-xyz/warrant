@@ -9,9 +9,12 @@ execution environment; zkVM — zero-knowledge virtual machine.
 
 ## 1. The case in one paragraph
 
-A buyer's agent rents a VM by the hour from a cloud provider. The buyer's funds sit in
-the escrow from the moment the order is placed. The provider is paid only for hours
-that it proved it delivered. The proof does not come from the provider's meter. It
+A buyer's agent rents a VM by the hour from a provider. In the pilot the provider is a
+clearly identified reseller: it rents the machine from an OpenStack cloud under its own
+account, with a spending limit at the cloud, and it terminates the machine when the
+lease ends. The cloud takes no part in Warrant and does not accept Warrant payments.
+The buyer's funds sit in the escrow from the moment the order is placed. The provider
+is paid only for hours that it proved it delivered. The proof does not come from the provider's meter. It
 comes from an agent inside the VM, a public randomness beacon, and anchors on the
 escrow chain. A policy that the buyer approved in advance names the proof and the
 price. No human touches a normal hour. The buyer's rule decides what an hour with
@@ -38,7 +41,7 @@ receipt gets the same result. That makes the meter a computation, not a party.
 |---|---|---|
 | Buyer's owner | Approves the policy once; funds orders | Trusted for their own money |
 | Buyer guardrail | The wallet key and one guardrail key. The guardrail key signs notes and usage records and vouches for the provider | Trusted within the order's ceiling. It runs the PoCC verifier. |
-| Provider | The payout key; the OpenStack cloud; the notary | Untrusted counterparty. Its evidence is signed by the agent in the VM, not by the provider. |
+| Provider (reseller) | The payout key; an account at the OpenStack cloud under a spending limit; the notary | Untrusted counterparty. Its evidence is signed by the agent in the VM, not by the provider. It owes the cloud whether or not Warrant pays. |
 | Agent in the VM | A key born at boot and erased at the end | Trusted to sign what it sees. Without hardware attestation the provider can read the key; the policy states the assurance level it accepts. |
 | Notary | An anchoring wallet | Nothing. It batches heartbeats and anchors roots. A dropped heartbeat earns nothing, so it cannot help the provider. |
 | drand beacon | — | A public random value every 3 s. Fixes the earliest time of each heartbeat. |
@@ -56,7 +59,7 @@ written in advance:
 | `kind: signed_usage`, `meter_key` | Only a usage record signed by the buyer's guardrail key counts as delivery |
 | `meter_spec` | The hash of PoCC's parameters: VM image, flavor, beacon, slot length, bracket, anchor contract, attestation level. The verifier signs nothing for other parameters |
 | `price_per_unit`, `tolerance` | A note for hour k pays at most `credited seconds × price` |
-| `min_uptime_bp`, `min_assurance` | An hour below the uptime floor or the assurance level is not paid |
+| `min_coverage_bp`, `min_assurance` | Creditable interval coverage, not uptime: the share of the hour's schedulable 60 s intervals that were credited, with the denominator fixed before the hour runs. An hour below the floor or the assurance level gets a zero note |
 | `rule` | The owner's spending rules on top: amount cap, provider category, acceptance |
 
 The policy also fixes `lease_id`, the ceiling, the per-hour cap and the batch size.
@@ -92,9 +95,10 @@ sequenceDiagram
 ```
 
 The buyer takes no part in settlement. It answers one challenge per hour, after the
-hour, the last one after delivery. The provider serves hour k+1 against note k; if
-note k has not arrived by the end of hour k+1, the provider stops. Its exposure to
-the buyer is one hour plus provisioning. An hour below the policy's uptime floor
+hour, the last one after delivery. The provider serves hour k+1 against note k: it
+waits at most the policy's `challenge_timeout_s` after hour k for the note, and stops
+if it does not arrive. Its exposure to the buyer is one hour at the cap, plus that
+timeout and its shutdown latency at the hourly price, plus provisioning. An hour below the policy's coverage floor
 gets a record and a note for 0, so the batch stays contiguous and settles. If the
 provider delivers nothing, no heartbeat exists and no hour is paid. The state
 machine is in `lease-evidence.md` section 5a.5 of policy-execution.
