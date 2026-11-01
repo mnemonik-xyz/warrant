@@ -22,9 +22,10 @@ downtime is worth.
 The hardware-purchase specification left the question open: for a hosted service,
 who signs the acceptance? A note that the buyer signs authorizes a payment. It does not
 prove that the service ran. The provider's own meter is the party being paid. In the
-PoCC live test of 2026-10-28, the provider's meter (OpenStack Nova) billed 3,516 s for
-an hour in which the VM ran for 2,460 s. The difference was build time before the VM
-was ready and ten minutes in which the provider had paused it.
+PoCC live test of 2026-10-28, the provider's meter (OpenStack Nova) counted 3,516 s
+for an hour in which PoCC credited 2,460 s. The difference was build time before the
+agent was ready, ten minutes in which the provider had paused the VM, and six minutes
+of heartbeats sent late after the pause, which earned nothing.
 
 PoCC closes the gap. Its verifier credits only the seconds between two heartbeats
 that the VM's agent signed and that a notary anchored within 30 s of their beacon
@@ -90,21 +91,26 @@ sequenceDiagram
     Note over Chain: after settleBy, the remainder returns to the buyer
 ```
 
-The buyer takes no part in settlement. It answers one challenge per hour. If the
-buyer does not answer, the provider stops the service after that hour. If the provider
-delivers nothing, no heartbeat exists and no hour is paid.
+The buyer takes no part in settlement. It answers one challenge per hour, after the
+hour, the last one after delivery. The provider serves hour k+1 against note k; if
+note k has not arrived by the end of hour k+1, the provider stops. Its exposure to
+the buyer is one hour plus provisioning. An hour below the policy's uptime floor
+gets a record and a note for 0, so the batch stays contiguous and settles. If the
+provider delivers nothing, no heartbeat exists and no hour is paid. The state
+machine is in `lease-evidence.md` section 5a.5 of policy-execution.
 
 ## 6. What is proved and what is not
 
 | Proved | Not proved in the first implementation |
 |---|---|
-| The VM existed and ran the agent for every credited minute | That the VM ran the agreed image on genuine hardware: this needs attestation (Stage 1 of PoCC, AMD SEV-SNP) |
-| The seconds were counted by public code that anyone can re-run | That the VM was fast or responsive while it heartbeated |
-| The provider was paid at most `credited × price` per hour | That the buyer's guardrail ran the verifier honestly: it can under-credit, which costs the provider one hour and is visible to anyone who re-runs the verifier |
+| An agent key signed a heartbeat on every credited 60 s slot, and each heartbeat was anchored in time: sampled liveness. Stage 0 assumes the provider does not extract the key and run the signer elsewhere | That the machine was available between two heartbeats, that it ran the agreed image on genuine hardware (Stage 1, AMD SEV-SNP), that it had the agreed resources, that it was fast, or that any job ran correctly. PoCC's architecture lists which evidence establishes each |
+| The seconds were counted by public code that anyone can re-run | That the buyer's guardrail ran that code: the guest checks the guardrail's signature and the gates, not the metering. The first implementation trusts the guardrail's attestation of delivery |
+| The provider was paid at most `credited × price` per hour, to the fixed recipient, inside the ceiling | That the records are true. A buyer that under-credits loses its service after one hour and can be shown wrong by anyone who re-runs the verifier. A buyer that over-credits pays from its own funds. Whoever holds the buyer's guardrail key can sign records and notes that agree and pay the recipient for hours that did not happen, up to the ceiling |
 | Every payment names the policy and the delivery specification the buyer approved | — |
 
-A later step runs the PoCC verifier inside the rent guest. The chain then re-runs
-the meter, and the guardrail key no longer attests delivery.
+A later step runs the PoCC verifier inside the rent guest over authenticated
+evidence. The chain then re-runs the meter, and the guardrail key no longer attests
+delivery.
 
 ## 7. Disputes
 
@@ -125,9 +131,13 @@ PoCC integration specification and deferred.
 ## 9. Demo moments
 
 1. The buyer funds an order; the provider accepts and boots the VM; heartbeats appear on the anchor contract within a minute.
-2. The provider's own meter bills 3,516 s for an hour; the receipt is refused with `E_OVERBILL`.
-3. The provider pauses the VM for ten minutes; the hour is credited 2,460 s; the buyer's uptime rule refuses the note; nothing is paid for that hour.
+2. The provider's own meter counts 3,516 s for an hour that PoCC credits 2,460 s; a note for 3,516 s fails gate D5 and the batch is refused.
+3. The provider pauses the VM for ten minutes; the hour is credited 2,460 s of 3,540 creditable, below the 95 % floor; the buyer signs a zero note; the batch settles with that hour unpaid.
 4. An honest hour: one record, one note, one batch, one settlement.
+
+Moments 2 and 3 use the figures of the 2026-10-28 run. That run predates the escrow
+binding. Its receipts carried a provider bill and a verdict `E_OVERBILL` that no
+longer exist. The demo is re-recorded on an escrow-bound run.
 
 ## 10. Sources
 
