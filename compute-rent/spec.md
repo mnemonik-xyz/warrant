@@ -138,7 +138,7 @@ PoCC integration specification and deferred.
 | Agent in each VM | One signature and one small request per minute |
 | Notary anchoring | 1,440 transactions a day for all VMs together; paid by the provider as a cost of selling |
 | Verification | Seconds of CPU per hour, on the buyer's side |
-| Proving | One proof per batch of hours, in the background; the batch size follows the measured proving cost |
+| Proving | One proof per daily batch, in the background, on a GPU prover: the rent work is 674,352 zkVM cycles per hour of service, about 77 minutes per daily batch on a CPU and 16 s to 3 minutes on a GPU by published rates, plus an 80 s Groth16 wrap; cents per VM-day on a GPU, about $1.30 on a CPU. Measured by PE-8 and DL-13 before the batch size is fixed |
 
 ## 9. Demo moments
 
