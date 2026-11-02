@@ -62,9 +62,14 @@ written in advance:
 | `min_coverage_bp`, `min_assurance` | Creditable interval coverage, not uptime: the share of the hour's schedulable 60 s intervals that were credited, with the denominator fixed before the hour runs. An hour below the floor or the assurance level gets a zero note |
 | `rule` | The owner's spending rules on top: amount cap, provider category, acceptance |
 
-The policy also fixes `lease_id`, the ceiling, the per-hour cap and the batch size.
-The escrow stores `policyHash` and `deliverySpecHash` at `offer`. A receipt for other
-values cannot settle the order.
+The policy also fixes `lease_id`, the ceiling, the per-hour cap, the batch size, the
+service period (`service_start`, `service_end`, `piece_s`) and `challenge_timeout_s`.
+The escrow is `WarrantEscrow` of the policy-execution framework, with the rent journal
+v2 (`schemaId`, the two delivery words, the rent extension). It stores `policyHash` and
+`deliverySpecHash` at `offer`; a receipt for other values, or for another schema,
+cannot settle the order. Settlement is by proof only. The interface is
+`docs/handoff/04-rent-interface-v1.md` in policy-execution (PE-0); the invoice journal
+and `ProofInvoiceEscrow` are not used by this case.
 
 ## 5. The hourly cycle
 
@@ -95,11 +100,14 @@ sequenceDiagram
 ```
 
 The buyer takes no part in settlement. It answers one challenge per hour, after the
-hour, the last one after delivery. The provider serves hour k+1 against note k: it
-waits at most the policy's `challenge_timeout_s` after hour k for the note, and stops
-if it does not arrive. Its exposure to the buyer is one hour at the cap, plus that
-timeout and its shutdown latency at the hourly price, plus provisioning. An hour below the policy's coverage floor
-gets a record and a note for 0, so the batch stays contiguous and settles. If the
+hour, the last one after delivery. When hour k ends, hour k+1 starts provisionally:
+the machine keeps running, its funding is reserved, and the provider waits at most the
+policy's `challenge_timeout_s` for note k. If the note arrives, hour k+1 is billable
+from its start; if not, the provider stops and the provisional part of hour k+1 is its
+loss. Its exposure to the buyer is one hour at the cap, plus that timeout and its
+shutdown latency at the hourly price, plus provisioning. An hour below the policy's
+coverage floor gets a record and a note for 0, so the batch stays contiguous and
+settles. If the
 provider delivers nothing, no heartbeat exists and no hour is paid. The state
 machine is in `lease-evidence.md` section 5a.5 of policy-execution.
 
