@@ -116,7 +116,7 @@ machine is in `lease-evidence.md` section 5a.5 of policy-execution.
 | Proved | Not proved in the first implementation |
 |---|---|
 | An agent key signed a heartbeat on every credited 60 s slot, and each heartbeat was anchored in time: sampled liveness. Stage 0 assumes the provider does not extract the key and run the signer elsewhere | That the machine was available between two heartbeats, that it ran the agreed image on genuine hardware (Stage 1, AMD SEV-SNP), that it had the agreed resources, that it was fast, or that any job ran correctly. PoCC's architecture lists which evidence establishes each |
-| The seconds were counted by public code that anyone can re-run | That the buyer's guardrail ran that code: the guest checks the guardrail's signature and the gates, not the metering. The first implementation trusts the guardrail's attestation of delivery |
+| The seconds were counted by public code that anyone can re-run | That the buyer's guardrail ran that code: the guest checks the guardrail's signature and the gates, not the metering. The first implementation trusts the guardrail's attestation of delivery. With the enclave agent (section 7) the signer is attested hardware, and the records hold against the buyer too |
 | The provider was paid at most `credited × price` per hour, to the fixed recipient, inside the ceiling | That the records are true. A buyer that under-credits loses its service after one hour and can be shown wrong by anyone who re-runs the verifier. A buyer that over-credits pays from its own funds. Whoever holds the buyer's guardrail key can sign records and notes that agree and pay the recipient for hours that did not happen, up to the ceiling |
 | Every payment names the policy and the delivery specification the buyer approved | — |
 
@@ -124,12 +124,22 @@ A later step runs the PoCC verifier inside the rent guest over authenticated
 evidence. The chain then re-runs the meter, and the guardrail key no longer attests
 delivery.
 
-## 7. Disputes
+## 7. Settlement paths and the dispute mechanism (ruled 6 Nov 2026, pocc decision 49)
 
-Not in the first implementation. A disagreement ends where the framework ends it:
-a missing or insufficient record gives `Ask`, the owner decides, and the hour stays
-unpaid until then. A dispute entity with re-execution by a referee is designed in the
-PoCC integration specification and deferred.
+Two paths, selected by the policy's `min_assurance`:
+
+| | Happy path (every lease) | Dispute path |
+|---|---|---|
+| What happens | The honest buyer signs each hour's note and each batch's acknowledgement; the acknowledgement pays the batch. No proof is made. | The buyer does not sign within the response period; the provider submits a proof over the meter's records and is paid for the eligible hours. |
+| `min_assurance = 0` (Stage 0, no enclave) | Yes | **None.** The meter is the buyer's own guardrail, so its records prove nothing against the buyer. A missing signature stops the lease after its timeout; the batch settles what the buyer signed; the provider's loss stays within its exposure bound. |
+| `min_assurance = 1` (Stage 1, the enclave agent) | Yes | **Yes.** The meter is the enclave agent: the PoCC agent and verifier in a hardware-attested component inside the machine (AMD SEV-SNP), whose key neither the buyer's system nor the provider's host can read; the attestation binds the key to the measurement the policy pins. Its records are evidence against both parties. |
+
+Not pursued: a meter run by a third party, a sidecar or observer outside the machine,
+and the verifier inside the guest (X-1). The referee dispute with re-execution of the
+PoCC integration specification stays deferred. Stage 1 is not implemented, so every
+lease today is on the first row. The full specification is
+`policy-execution/docs/handoff/05-rent-dispute-mechanism.md` (section 2a) and
+`pocc/docs/handoff/dispute-mechanism.md`.
 
 ## 8. Costs
 
